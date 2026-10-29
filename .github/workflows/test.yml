@@ -1,0 +1,36 @@
+name: toolkit-tests
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '24' }
+      - name: shellcheck
+        run: shellcheck -x -S warning termux/*.sh termux/lib/common.sh tests/termux/*.sh scripts/*.sh
+      - name: secret scan
+        run: scripts/check-secrets.sh
+      - name: Termux script tests (run on Linux)
+        run: bash tests/termux/run-tests.sh && bash tests/termux/test-check-secrets.sh
+      - name: PowerShell tests under pwsh on Linux
+        run: pwsh -NoProfile -File tests/windows/run-tests.ps1
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '24' }
+      - name: PowerShell tests (Windows PowerShell 5.1)
+        shell: powershell
+        run: .\tests\windows\run-tests.ps1
+      - name: PowerShell tests (PowerShell 7)
+        shell: pwsh
+        run: ./tests/windows/run-tests.ps1
