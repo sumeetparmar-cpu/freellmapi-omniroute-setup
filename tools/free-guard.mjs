@@ -6,11 +6,15 @@
 // Zero dependencies (Node >= 20).
 //
 //   node free-guard.mjs --gateway freellmapi|omniroute --upstream http://127.0.0.1:3001 --listen 127.0.0.1:3101
-//        [--policy file] [--state file] [--log file] [--allow-auto] [--max-body-kb 1024] [--no-rate-limit]
+//        [--policy file] [--state file] [--log file] [--catalog-audited] [--kill-file file] [--max-body-kb 1024] [--no-rate-limit]
+// --catalog-audited (FreeLLMAPI only): the operator ran 'free-policy freellmapi apply' so every ENABLED catalog model is free;
+//   'auto' and grouped model ids that the gateway itself serves are then accepted. --kill-file: while that file exists every
+//   inference request is refused (written by 'free-policy ... audit --flag-file' when drift is detected).
 import http from 'node:http';
 import { readFileSync, writeFileSync, renameSync, appendFileSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
+import { existsSync } from 'node:fs';
 import { loadPolicy, classify, limitsFor, routeAllowed, inspectBody } from './lib/free-policy.mjs';
 
 export function parseArgs(argv) {
@@ -19,7 +23,7 @@ export function parseArgs(argv) {
     const a = argv[i];
     if (!a.startsWith('--')) throw new Error(`unexpected argument ${a}`);
     const k = a.slice(2);
-    if (['allow-auto', 'no-rate-limit'].includes(k)) o[k] = true;
+    if (['catalog-audited', 'no-rate-limit'].includes(k)) o[k] = true;
     else o[k] = argv[++i];
   }
   return o;
@@ -38,6 +42,19 @@ export function createGuard(opts) {
   const state = { day: utcDay(now()), counts: {}, cooldowns: {}, blocked: 0, passed: 0, ...(readState(opts.stateFile) ?? {}) };
   const windows = new Map(); // key -> timestamps (ms) within the last 60s
   let dirty = false;
+  const served = new Map(); // sha256(auth) -> { at, ids:Set }
+  async function servedModels(auth) {
+    const k = createHash('sha256').update(auth ?? '').digest('hex'); const c = served.get(k);
+    if (c && now() - c.at < 60_000) return c.ids;
+    const ids = await new Promise((resolve) => {
+      const r = http.request({ hostname: up.hostname, port: up.port, path: '/v1/models', method: 'GET', headers: auth ? { authorization: auth } : {}, timeout: 10_000 }, (x) => {
+        let t = ''; x.on('data', (d) => (t += d)); x.on('end', () => { try { resolve(new Set(JSON.parse(t).data.map((m) => m.id))); } catch { resolve(null); } });
+      });
+      r.on('error', () => resolve(null)); r.on('timeout', () => r.destroy()); r.end();
+    });
+    if (ids) served.set(k, { at: now(), ids });
+    return ids;
+  }
 
   function utcDay(ms) { return new Date(ms).toISOString().slice(0, 10); }
   function readState(f) { try { return f ? JSON.parse(readFileSync(f, 'utf8')) : null; } catch { return null; } }
@@ -83,7 +100,7 @@ export function createGuard(opts) {
     rollDay();
     const cd = Object.fromEntries(Object.entries(state.cooldowns).filter(([, c]) => c.until > now()).map(([k, c]) => [k, Math.ceil((c.until - now()) / 1000)]));
     return { gateway, day: state.day, passed: state.passed, blocked: state.blocked, requestsToday: state.counts, cooldownsSec: cd,
-      caps: Object.fromEntries(Object.keys(policy.providers).map((p) => [p, limitsFor(policy, p)])), allowAuto: !!opts.allowAuto };
+      caps: Object.fromEntries(Object.keys(policy.providers).map((p) => [p, limitsFor(policy, p)])), catalogAudited: !!opts.catalogAudited, killSwitch: !!(opts.killFile && existsSync(opts.killFile)) };
   }
 
   const server = http.createServer((req, res) => {
@@ -103,7 +120,7 @@ export function createGuard(opts) {
       if (size > maxBody && !aborted) { aborted = true; deny(res, 413, 'body_too_large', 'request body too large'); req.destroy(); }
       else if (!aborted) chunks.push(c);
     });
-    req.on('end', () => {
+    req.on('end', async () => {
       if (aborted) return;
       const raw = Buffer.concat(chunks);
       let meta = { provider: undefined, model: undefined };
@@ -112,7 +129,12 @@ export function createGuard(opts) {
         try { body = raw.length ? JSON.parse(raw.toString('utf8')) : {}; } catch { return deny(res, 400, 'bad_json', 'body must be JSON'); }
         const bad = inspectBody(policy, body);
         if (bad) return deny(res, 403, 'param_blocked', bad);
-        const v = classify(policy, gateway, body.model, { allowAuto: !!opts.allowAuto });
+        if (opts.killFile && existsSync(opts.killFile)) return deny(res, 503, 'kill_switch', 'free-only audit failed; inference is suspended until `free-policy audit` passes');
+        let v = classify(policy, gateway, body.model, { allowAuto: !!opts.catalogAudited });
+        if (!v.ok && gateway === 'freellmapi' && opts.catalogAudited && typeof body.model === 'string' && body.model) {
+          const ids = await servedModels(req.headers.authorization);
+          if (ids?.has(body.model)) v = { ok: true, provider: 'freellmapi', model: body.model };
+        }
         if (!v.ok) return deny(res, 403, 'model_blocked', `model blocked by free-only policy: ${v.reason}`, { model: String(body.model ?? ''), provider: v.provider });
         meta = v;
       }
@@ -165,7 +187,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     const [host, port] = (a.listen ?? '127.0.0.1:3101').split(/:(?=[^:]*$)/);
     if (!['127.0.0.1', 'localhost', '::1'].includes(host)) throw new Error('--listen must be loopback; put Caddy/Tailscale in front if you need remote access');
     const g = createGuard({ gateway: a.gateway, upstream: a.upstream, policyFile: a.policy, stateFile: a.state, logFile: a.log,
-      allowAuto: !!a['allow-auto'], noRateLimit: !!a['no-rate-limit'], maxBodyKb: a['max-body-kb'] });
+      catalogAudited: !!a['catalog-audited'], killFile: a['kill-file'], noRateLimit: !!a['no-rate-limit'], maxBodyKb: a['max-body-kb'] });
     g.server.listen(Number(port), host, () => process.stderr.write(`free-guard ${a.gateway} ${host}:${port} -> ${a.upstream}\n`));
     for (const s of ['SIGINT', 'SIGTERM']) process.on(s, () => g.server.close(() => process.exit(0)));
   } catch (e) { process.stderr.write(`free-guard: ${e.message}\n`); process.exit(2); }

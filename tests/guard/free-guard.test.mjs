@@ -68,7 +68,7 @@ test('FreeLLMAPI: auto is blocked unless explicitly enabled; paid ids are blocke
     assert.equal((await r.call('POST', '/v1/chat/completions', chat('@cf/moonshotai/kimi-k2.6'))).status, 403);
     assert.equal((await r.call('POST', '/v1/chat/completions', chat('openai/gpt-oss-120b'))).status, 200);
   } finally { await r.close(); }
-  r = await rig('freellmapi', { allowAuto: true });
+  r = await rig('freellmapi', { catalogAudited: true });
   try { assert.equal((await r.call('POST', '/v1/chat/completions', chat('auto'))).status, 200); } finally { await r.close(); }
 });
 
@@ -179,4 +179,31 @@ test('guard log lines never contain the Authorization value', async () => {
   } finally { process.stderr.write = orig; await r.close(); }
   assert.ok(lines.length >= 2);
   assert.ok(!lines.join('').includes(CANARY));
+});
+
+test('catalog-audited FreeLLMAPI: grouped ids are accepted only if the gateway serves them; kill-file suspends inference', async () => {
+  const { writeFileSync, rmSync, mkdtempSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os'); const { join } = await import('node:path');
+  const seen = [];
+  const up = http.createServer((q, s) => {
+    let b = ''; q.on('data', (c) => (b += c)); q.on('end', () => {
+      seen.push(`${q.method} ${q.url}`);
+      s.writeHead(200, { 'content-type': 'application/json' });
+      s.end(q.url === '/v1/models' ? JSON.stringify({ data: [{ id: 'gpt-oss-120b-grouped' }, { id: 'auto' }] }) : '{"choices":[]}');
+    });
+  });
+  const upPort = await listen(up);
+  const kill = join(mkdtempSync(join(tmpdir(), 'fg-')), 'kill');
+  const g = createGuard({ gateway: 'freellmapi', upstream: `http://127.0.0.1:${upPort}`, policy, quiet: true, catalogAudited: true, killFile: kill });
+  const port = await listen(g.server);
+  const post = (model) => new Promise((res) => { const r = http.request({ host: '127.0.0.1', port, path: '/v1/chat/completions', method: 'POST', headers: { authorization: 'Bearer x' } }, (x) => { let t = ''; x.on('data', (d) => (t += d)); x.on('end', () => res({ status: x.statusCode, t })); }); r.end(JSON.stringify(chat(model))); });
+  try {
+    assert.equal((await post('gpt-oss-120b-grouped')).status, 200);
+    assert.equal((await post('totally-unknown-model')).status, 403);
+    assert.equal((await post('auto')).status, 200);
+    writeFileSync(kill, 'x');
+    const k = await post('auto'); assert.equal(k.status, 503); assert.match(k.t, /kill_switch/);
+    rmSync(kill);
+    assert.equal((await post('auto')).status, 200);
+  } finally { g.server.close(); up.close(); up.closeAllConnections?.(); g.server.closeAllConnections?.(); }
 });

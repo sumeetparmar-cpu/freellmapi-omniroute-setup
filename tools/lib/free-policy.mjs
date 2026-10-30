@@ -40,7 +40,7 @@ export function classify(policy, gateway, rawModel, opts = {}) {
   const model = rawModel == null ? '' : norm(rawModel);
   if (model === '' || model === 'auto') {
     return gateway === 'freellmapi' && opts.allowAuto
-      ? { ok: true, provider: 'auto', model: 'auto' }
+      ? { ok: true, provider: 'freellmapi', model: 'auto' }
       : { ok: false, reason: "'auto' / missing model is blocked (it could route to an unverified provider)" };
   }
   if (gateway === 'omniroute') {
@@ -67,7 +67,7 @@ export function classify(policy, gateway, rawModel, opts = {}) {
 }
 
 export function limitsFor(policy, provider) {
-  return policy.providers[provider]?.limits ?? { rpm: 10, rpd: 200 };
+  return policy.providers[provider]?.limits ?? policy.gatewayLimits?.[provider] ?? { rpm: 10, rpd: 200 };
 }
 
 export function routeAllowed(policy, method, urlPath) {

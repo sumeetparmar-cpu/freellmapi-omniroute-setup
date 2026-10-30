@@ -11,6 +11,8 @@
     "cloudflare": ["https://developers.cloudflare.com/workers-ai/platform/pricing/", "https://developers.cloudflare.com/workers-ai/platform/limits/", "https://developers.cloudflare.com/workers-ai/platform/data-usage/"],
     "ovh": ["https://docs.ovhcloud.com/en/guides/public-cloud/ai-machine-learning/ai-endpoints-getting-started"]
   },
+  "customEndpoints": { "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1": "ovh" },
+  "gatewayLimits": { "freellmapi": { "rpm": 120, "rpd": 20000 } },
   "allowedRoutes": [
     "GET /v1/models",
     "POST /v1/chat/completions",
