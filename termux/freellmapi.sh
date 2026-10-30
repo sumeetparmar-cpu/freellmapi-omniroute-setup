@@ -101,6 +101,12 @@ cmd_rebuild() {
 cmd_install() {
   check_prereqs
   ensure_dirs
+  # A clone killed half-way (SIGKILL, dropped connection) can leave a $SRC with a .git but no usable HEAD or tree. Without this check the next
+  # run would say "source already present" and fail later in the build. "Complete" = a resolvable HEAD and a package.json; only a directory
+  # inside this gateway's own home is ever removed.
+  if [ -d "$SRC" ] && { ! git -C "$SRC" rev-parse --verify -q 'HEAD^{commit}' >/dev/null 2>&1 || [ ! -f "$SRC/package.json" ]; }; then
+    case "$SRC" in "$GW_HOME"/?*) warn "$SRC is an incomplete checkout from an interrupted install: removing it and cloning again"; rm -rf -- "$SRC" ;; *) die "$SRC looks incomplete but is outside $GW_HOME; refusing to touch it" ;; esac
+  fi
   if [ -d "$SRC/.git" ]; then info "source already at $SRC ($(git -C "$SRC" rev-parse --short HEAD)); use 'update' to move it"
   else
     info "cloning $REPO_URL ($FREELLMAPI_REF)"

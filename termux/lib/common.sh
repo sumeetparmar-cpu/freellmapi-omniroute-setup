@@ -161,16 +161,27 @@ timestamp() { date -u +%Y%m%dT%H%M%SZ; }
 # secrets (encryption keys, encrypted provider keys): it is created 0600 under $GW_BACKUP_DIR.
 backup_paths() {
   local name="$1" label="$2"; shift 2
-  local dir="$GW_BACKUP_DIR/$name" out p rel=()
+  local dir="$GW_BACKUP_DIR/$name" out tmp p rel=()
   mkdir -p "$dir"; chmod 700 "$dir"
-  out="$dir/$(timestamp)-$label.tar.gz"
+  # Leftovers of a backup that was killed mid-write. They never end in .tar.gz, so they are never listed, restored or chosen as "latest".
+  find "$dir" -maxdepth 1 -name '*.partial' -mmin +5 -delete 2>/dev/null || true
+  out="$dir/$(timestamp)-$label.tar.gz"; tmp="$out.partial"
   for p in "$@"; do [ -e "$p" ] && rel+=("${p#/}"); done
   [ "${#rel[@]}" -gt 0 ] || { warn "nothing to back up for $name yet"; return 1; }
-  ( umask 077; tar -C / -czf "$out" "${rel[@]}" )
-  chmod 600 "$out"
+  # Write beside the final name, check tar's own exit status, verify the archive reads back, and only then rename (atomic on one filesystem).
+  # A failed or truncated archive (disk full, OOM, power loss) is deleted instead of being reported as a successful backup.
+  if ! ( umask 077; tar -C / -czf "$tmp" "${rel[@]}" ) || ! gzip -t "$tmp" 2>/dev/null || ! tar -tzf "$tmp" >/dev/null 2>&1; then
+    rm -f -- "$tmp"; err "backup failed or produced an unreadable archive (disk full?); nothing was kept"; return 1
+  fi
+  chmod 600 "$tmp" && mv -- "$tmp" "$out"
   printf '%s\n' "$out"
 }
-latest_backup() { ls -1t "$GW_BACKUP_DIR/$1"/*.tar.gz 2>/dev/null | head -n1; }
+# Newest backup that actually reads back: a truncated archive with a newer mtime must not shadow the last good one (that is what rollback needs).
+latest_backup() {
+  local f
+  while IFS= read -r f; do if gzip -t "$f" 2>/dev/null; then printf '%s\n' "$f"; return 0; fi; done < <(ls -1t "$GW_BACKUP_DIR/$1"/*.tar.gz 2>/dev/null)
+  return 0
+}
 list_backups() { ls -1t "$GW_BACKUP_DIR/$1"/*.tar.gz 2>/dev/null || info "no backups for $1"; }
 # restore_archive ARCHIVE ALLOWED_PATH...  (caller must stop the gateway first)
 # Archives record absolute paths (minus the leading "/"). Every entry must be one of the ALLOWED_PATHs

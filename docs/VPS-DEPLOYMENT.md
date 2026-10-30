@@ -138,6 +138,20 @@ reload (a bad reload can affect your existing sites). Services in Docker's bridg
 Commands it never runs: `apt`, `docker` (except read-only `ps`/`volume ls`/`network ls`/`volume inspect`), `caddy`, `ufw`/`iptables`, `crontab`, `usermod` on existing users, anything in `/etc/ssh`, `/etc/sudoers*`, `/etc/caddy`, or existing application directories.
 This is checked mechanically: a grep of the committed scripts for those commands is part of `tests/vps/run-tests.sh`.
 
+## If an install is interrupted
+
+Every step is safe to re-run; there is no manual cleanup. What each interruption leaves, and what the re-run does (all covered by `tests/vps/partial-failure.test.sh`, 33 checks; 15 of them fail if the fixes are reverted):
+
+| Interrupted / failed | Left behind | Re-run |
+|---|---|---|
+| `runtime`: download cut short, or wrong bytes | nothing installed, no `runtime/node` link, temp dir removed by the EXIT trap; a wrong checksum aborts with `SHA-256 mismatch` | just run `runtime` again |
+| `runtime`: process **SIGKILLed** mid-download | a `runtime/.dl.XXXXXX` temp dir (~30 MB), no half-installed runtime | removes OUR `.dl.*` dirs older than 2 minutes (a concurrent run's fresh one is kept), then installs |
+| `runtime`: killed between the move and the `chown`/`chmod` | `node-vX` present but possibly wrong owner / group-writable | ownership and modes are re-applied on every run |
+| `toolkit`: crash between the two renames | no `toolkit/`, `toolkit.prev` and a half-copied `toolkit.new` | re-run re-stages and swaps; ends root-owned and not group/world-writable |
+| `install freellmapi`: `git clone` killed | a `freellmapi/` with a `.git` but no usable HEAD or tree | detected ("incomplete checkout"), removed (only inside that gateway's own home) and cloned again |
+| `install`: clone fails / build fails | no `state/*.installed_commit` marker; `start` refuses ("not built") | re-run after fixing the cause; nothing is ever marked installed unless the build finished |
+| `backup`: `tar` fails, disk full, or killed | previously: a truncated `*.tar.gz` reported as success and picked as "latest" for rollback. Now: written as `.partial`, checked (`tar` status, `gzip -t`, `tar -t`) and renamed atomically; failures delete it and exit non-zero; stale `.partial` files are cleaned | next backup works; `latest_backup`/`restore` also skip any archive that does not read back |
+
 ## Rollback
 | Level | Command | Affects |
 |---|---|---|

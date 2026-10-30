@@ -58,3 +58,11 @@ Resume rule: read the last "NEXT" line, continue from there. Facts here are date
 * CI    Real systemd validated on ubuntu-24.04 AND ubuntu-26.04: systemd-guard job 40/40 on both (first run 37/40: root-probe design flaw in my test, fixed). linux + windows green on both images.
 * DONE  FINAL HEAD ffc8097 CI: push + pull_request runs both `success` (linux, systemd-guard, vps-privileged, vps-e2e on ubuntu-24.04 AND 26.04, windows). No reviews, no review threads.
 * DONE  Docs corrected to match evidence: Ubuntu 26.04 and guard/audit real-systemd are now CI-verified; still unproven: gateway units under systemd, anything on the Hostinger VPS, real inference for the five keyed providers.
+
+## 2026-10-30 (session 4: gateway units, preflight, interruptions)
+
+* DONE  tests/vps/e2e-systemd.sh + CI job `e2e-systemd` (24.04 + 26.04): REAL deploy.sh + real installs with systemd in charge; reads cgroup v2 limits from the kernel, kill -9 recovery, independence, graceful stop leaves no process, StartLimit crash loop + documented recovery. (Result: see CI.)
+* DONE  Preflight: guard ports, ephemeral range, cgroup/container memory cap, overcommit, RAM left for neighbours, ro/noexec mounts, /tmp space, symlinked root, umask, foreign llm-* units (BLOCK), CA bundle, NTP, toolchain, DNS-vs-connect-vs-HTTP diagnostics. tests/vps/preflight-extra.test.sh 41/41 with negative controls + mutation-checked read-only scan.
+* FOUND+FIXED (real defects, interrupted-state class): backup_paths ignored tar's exit status and wrote the final filename directly (a truncated archive was reported as success and chosen as "latest" for rollback); latest_backup could return a corrupt archive; _node_install skipped chown/chmod on an existing dir; SIGKILLed downloads left temp dirs; a half-finished git clone was mistaken for a complete checkout.
+        tests/vps/partial-failure.test.sh 33/33; with the fixes reverted 15/33 FAIL (mutation-checked).
+* LESSON  Three of my own tests were wrong in instructive ways: `cmd | grep -q` SIGPIPE-killed the command under test; a fixture smaller than the stall threshold made a "stall" test a no-op; killing one PID of a process tree is not a crash simulation. `pkill -f` from the tool shell killed the shell three times: never again.

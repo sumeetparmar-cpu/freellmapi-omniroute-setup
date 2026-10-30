@@ -22,7 +22,7 @@ jobs:
       - name: secret scan
         run: scripts/check-secrets.sh
       - name: Free-only guard + policy tests (loopback mocks, no credentials)
-        run: node --test tests/guard/*.test.mjs && bash tests/vps/free-install.test.sh && bash tests/vps/monitor-guard.test.sh && bash tests/vps/guard-backup.test.sh && bash tests/vps/preflight-extra.test.sh
+        run: node --test tests/guard/*.test.mjs && bash tests/vps/free-install.test.sh && bash tests/vps/monitor-guard.test.sh && bash tests/vps/guard-backup.test.sh && bash tests/vps/preflight-extra.test.sh && bash tests/vps/partial-failure.test.sh
       - name: Termux script tests (run on Linux)
         run: bash tests/termux/run-tests.sh && bash tests/termux/test-check-secrets.sh
       - name: PowerShell tests under pwsh on Linux
@@ -56,6 +56,8 @@ jobs:
         with: { node-version: '24' }
       - name: VPS toolkit tests incl. real users, isolation, units, verify, gwctl
         run: sudo env PATH="$PATH" LLM_TEST_ALLOW_SYSTEM_CHANGES=1 bash tests/vps/run-tests.sh
+      - name: Interrupted installs and partial failures (runtime download, toolkit swap, backups, checkout)
+        run: sudo env PATH="$PATH" LLM_TEST_ALLOW_SYSTEM_CHANGES=1 bash tests/vps/partial-failure.test.sh
 
   vps-e2e:
     strategy:
