@@ -132,8 +132,10 @@ try {
     T 'Get-ApiKey missing file refused'  { Throws { Get-ApiKey 'GW_NOPE' (Join-Path $Tmp 'absent') } }
 
     Write-Host '# quota-report wrappers (against mock status endpoints; read-only)'
-    $canUni  = & node --input-type=module -e "import('$((Join-Path $Root 'tests/quota/mock-gateways.mjs').Replace('\\','/'))').then(m=>process.stdout.write(m.CANARY.unified))"
-    $canMgmt = & node --input-type=module -e "import('$((Join-Path $Root 'tests/quota/mock-gateways.mjs').Replace('\\','/'))').then(m=>process.stdout.write(m.CANARY.mgmt))"
+    # Node's ESM loader needs a file:// URL on Windows (a bare 'D:/...' path is rejected as scheme 'd:').
+    $mockUrl = [Uri]::new((Join-Path $Root 'tests/quota/mock-gateways.mjs')).AbsoluteUri
+    $canUni  = & node --input-type=module -e "import('$mockUrl').then(m=>process.stdout.write(m.CANARY.unified))"
+    $canMgmt = & node --input-type=module -e "import('$mockUrl').then(m=>process.stdout.write(m.CANARY.mgmt))"
     foreach ($spec in @(@('freellmapi', 18321, 'api/ping'), @('omniroute', 18322, 'api/health/ping'))) {
         $mock += Start-Process node -ArgumentList @((Join-Path $Root 'tests/quota/mock-gateways.mjs'), $spec[0], 'ok', $spec[1]) -PassThru -RedirectStandardOutput (Join-Path $Tmp "qm$($spec[1]).log")
         for ($i = 0; $i -lt 30 -and (Get-HttpStatus "http://127.0.0.1:$($spec[1])/$($spec[2])") -eq 0; $i++) { Start-Sleep -Milliseconds 200 }
