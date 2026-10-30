@@ -89,3 +89,22 @@ jobs:
       - name: Journal of the units (on failure)
         if: failure()
         run: sudo journalctl --no-pager -n 200 -u 'llm-guard-*' -u 'llm-free-audit-*' || true
+
+  # The GATEWAY units (llm-freellmapi / llm-omniroute) under real systemd with the real installs: cgroup limits read from the kernel,
+  # restart policy, StartLimit crash-loop, KillMode, graceful stop, independence. The sandbox e2e job above runs with LLM_NO_SYSTEMD=1.
+  e2e-systemd:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-26.04]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '24' }
+      - name: Gateway units under real systemd (real installs)
+        run: sudo env PATH="$PATH" LLM_TEST_ALLOW_SYSTEM_CHANGES=1 REQUIRE_SYSTEMD=1 bash tests/vps/e2e-systemd.sh
+      - name: Journal of the gateway units (on failure)
+        if: failure()
+        run: sudo journalctl --no-pager -n 200 -u 'llm-freellmapi' -u 'llm-omniroute' || true
