@@ -110,7 +110,7 @@ length argument (fixed); PowerShell treated redirected stdin as interactive (new
 
 ## VPS toolkit (`vps/`)
 
-Tested on a disposable Linux sandbox (Ubuntu 24.04 container, no systemd running, root). **Not run on a real VPS, not on Ubuntu 26.04.**
+Tested on a disposable Linux sandbox (Ubuntu 24.04 container, no systemd running, root). **Not run on a real VPS.** (Ubuntu 26.04 and real systemd are covered by CI, see the last section.)
 
 | Suite | Command | Result |
 |---|---|---|
@@ -124,7 +124,7 @@ What the real runs demonstrated (not just asserted): service users are system ac
 
 Defects found by these tests and fixed: service-user commands inherited the caller's working directory (on a real server that is `/root/llm-deploy`, mode 0700, so `git clone` and esbuild failed with 'Permission denied'): found by the first CI run of the end-to-end job on GitHub's runner, not by my sandbox; every service-user command now starts in its own directory (`env -C`), with a regression test and the rehearsal now starting from an inaccessible directory; the preflight's "propose a free port" call passed the alternatives as one argument (proposed nothing); `act` did not abort when a step failed, so a failed checksum would not have stopped the install (now every failed step ends the run); `systemd-analyze verify` rejects a temp file without a `.service` suffix, which would have broken the `units` step; the static safety scan initially matched nothing at line start or inside `act "…" cmd` calls (caught by a planted-violation meta-test, now fixed).
 
-Not verifiable here: Ubuntu 26.04; real systemd start/stop/restart/cgroup limits/`KillMode` (units are checked with `systemd-analyze verify` and unit-tested only; the rehearsal used `LLM_NO_SYSTEMD=1`, and its preflight "no systemd" blocker was overridden on purpose because the container has none); behaviour next to real Docker/Caddy/n8n/SUPPAR/EARNIX (docker and systemctl are shims in Part A); the Hostinger environment (CPU, RAM, disk, existing ports); Windows and Android for anything in `vps/`.
+Not verifiable in the sandbox (CI now covers Ubuntu 26.04 and real systemd for the guard/audit units, see the last section; the *gateway* units' cgroup limits/`KillMode` remain unproven because the rehearsal uses `LLM_NO_SYSTEMD=1`, and its preflight "no systemd" blocker was overridden on purpose because the container has none); behaviour next to real Docker/Caddy/n8n/SUPPAR/EARNIX (docker and systemctl are shims in Part A); the Hostinger environment (CPU, RAM, disk, existing ports); Windows and Android for anything in `vps/`.
 
 ## Free-only layer (added 2026-10-30)
 
@@ -132,9 +132,9 @@ Environment: Ubuntu 24.04 container, Node 24.22.2 (from the npm registry), FreeL
 
 | What | Command | Result |
 |---|---|---|
-| Guard + policy CLI against loopback mocks (policy, params, routes, rate limit, cooldown, daily cap, restart recovery, kill switch, audit/apply, custom nodes, secret canary) | `node --test tests/guard/*.test.mjs` | **36 passed, 0 failed** |
+| Guard + policy CLI against loopback mocks (policy, params, routes, rate limit, cooldown, daily cap, restart recovery, kill switch, audit/apply, custom nodes, secret canary) | `node --test tests/guard/*.test.mjs` | **66 passed, 0 failed** (incl. quota suite; guard/policy/security/fuzz/status) |
 | Adversarial bypass suite, asserting what the UPSTREAM received (40 bad model strings, 28 route/path tricks, header stripping, Host rebinding, smuggling, content types, client keys, in-flight cap, crash/restart quota) | included above (`tests/guard/security.test.mjs`) | **12 passed** |
-| VPS unit rendering (dry-run default, 6 units, loopback, users, client keys, sandboxing, no secrets, port clash) | `bash tests/vps/free-install.test.sh` | **17 passed, 0 failed** |
+| VPS unit rendering (dry-run default, 6 units, loopback, users, client keys, sandboxing, no secrets, port clash) | `bash tests/vps/free-install.test.sh` | **24 passed, 0 failed** (incl. client-key downgrade/missing-file safety rails) |
 | Privileged VPS suite in this disposable container (real throw-away users, dirs, units, update + rollback, purge) | `sudo LLM_TEST_ALLOW_SYSTEM_CHANGES=1 bash tests/vps/run-tests.sh` | **132 passed, 0 failed**; no users/dirs left behind |
 | Release archive verified from a clean extraction with the pinned Node 24.11.0 | `scripts/make-release.sh --verify` | all suites pass; checksum verified |
 | `systemd-analyze verify` + `security --offline` on the new units (with stand-in binaries) | local | verify passes; exposure 2.9 OK (existing gateway unit: 3.0) |
@@ -146,7 +146,7 @@ Environment: Ubuntu 24.04 container, Node 24.22.2 (from the npm registry), FreeL
 | Audit of a suspicious OmniRoute custom node | live | flagged, kill flag set; removed -> flag cleared |
 | Direct-access bypass: gateway key through the guard / guard key against each gateway | live | both 401 |
 
-**Not tested (blocked):** real inference for Groq/Gemini/Mistral/OpenRouter/Cloudflare through either gateway (no keys supplied), **Ubuntu 26.04** (no image available; static review + `os-release` fixture only), the full `e2e-sandbox.sh` rehearsal (it downloads Node from nodejs.org, which this environment's network policy blocks; the pinned-Node path was instead exercised by running the suites under Node 24.11.0), systemd *start* of the units (no running systemd here), and anything on the VPS (not accessed). `systemd-analyze verify` could only check unit syntax here (no deployed `/srv/llm`).
+**Not tested (blocked):** real inference for Groq/Gemini/Mistral/OpenRouter/Cloudflare through either gateway (no keys supplied), the *gateway* units under real systemd, and anything on the VPS (not accessed). Ubuntu 26.04 and the guard/audit systemd path are verified in CI (below), not in this sandbox.
 
 ### Real systemd and Ubuntu 26.04 (CI)
 
@@ -155,3 +155,8 @@ Environment: Ubuntu 24.04 container, Node 24.22.2 (from the npm registry), FreeL
 routing header; `kill -9` => automatic restart with a new PID and the daily counter intact; `systemctl stop` with a never-ending stream open finishes inside the drain window; audit failure => kill flag => 503 => fix => flag cleared => inference resumes; FreeLLMAPI audit
 auto-fixes drift (disable-only); the two guards are independent (stopping one leaves the other serving, separate state files); `monitor.sh` reports the real units; `free-install remove` deletes only the named gateway's units. The existing privileged suite and the end-to-end rehearsal
 also run on both images. The test refuses to run unless root, flagged, systemd is PID 1 and no `llm-guard-*` unit exists.
+
+### Latest CI evidence (head `ffc8097`, 2026-10-30)
+
+Both the `push` and `pull_request` runs of the `toolkit-tests` workflow finished **success**: `linux`, `systemd-guard`, `vps-privileged` and `vps-e2e` on `ubuntu-24.04` **and** `ubuntu-26.04`, plus `windows`. Along the way CI exposed two flaws in this project's own tests (the non-root fallback of `free-install.test.sh`, and a root-probe design error in `systemd-guard.test.sh`); both were reproduced and fixed in the tests, with no assertion weakened.
+Additional local-only checks: a deterministic 400-request fuzz test whose invariant ("everything that reaches the gateway is policy-compliant") was mutation-checked, a live re-run of real keyless inference through both gateways on the final code, and `tests/vps/guard-backup.test.sh` (16) / `tests/vps/monitor-guard.test.sh` (9).

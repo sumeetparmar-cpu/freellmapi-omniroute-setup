@@ -56,3 +56,5 @@ Resume rule: read the last "NEXT" line, continue from there. Facts here are date
 * NOTE  Fuzz first reported ECONNRESETs: traced to Node's HTTP *client* sending GET/DELETE bodies without framing (desyncing keep-alive), not the guard; test client now sends Content-Length.
 * DONE  Installer safety rails: `enable` refuses a guard whose key files are missing/empty (avoids crash-loop); re-running `units` without --client-keys over a hardened unit is refused unless --allow-downgrade. ShellCheck caught a bad `local` in my own edit. free-install test 24/24.
 * CI    Real systemd validated on ubuntu-24.04 AND ubuntu-26.04: systemd-guard job 40/40 on both (first run 37/40: root-probe design flaw in my test, fixed). linux + windows green on both images.
+* DONE  FINAL HEAD ffc8097 CI: push + pull_request runs both `success` (linux, systemd-guard, vps-privileged, vps-e2e on ubuntu-24.04 AND 26.04, windows). No reviews, no review threads.
+* DONE  Docs corrected to match evidence: Ubuntu 26.04 and guard/audit real-systemd are now CI-verified; still unproven: gateway units under systemd, anything on the Hostinger VPS, real inference for the five keyed providers.
