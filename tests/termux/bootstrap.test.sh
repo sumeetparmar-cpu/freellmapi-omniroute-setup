@@ -18,7 +18,8 @@ T="$ROOT/termux"; C="$GW_HOME/config"
 cleanup() {
   bash "$T/gateways.sh" stop >/dev/null 2>&1
   local f p; for f in "$GW_HOME"/run/*.pid; do [ -f "$f" ] || continue; p="$(cat "$f")"; kill -KILL -- "-$p" 2>/dev/null; done
-  rm -rf "$TMP"; echo "bootstrap (real install): passed=$PASS failed=$FAIL"; [ "$FAIL" -eq 0 ]
+  rm -rf "$TMP"; echo "bootstrap (real install): passed=$PASS failed=$FAIL"
+  [ "$FAIL" -eq 0 ] || exit 1   # an EXIT trap must call exit: bash ignores its last status otherwise (a failing run would report success)
 }
 trap cleanup EXIT
 ck() { local n="$1"; shift; if "$@" >"$TMP/out" 2>&1; then PASS=$((PASS+1)); echo "ok   - $n"; else FAIL=$((FAIL+1)); echo "FAIL - $n"; sed 's/^/       /' "$TMP/out" | tail -10; fi; }

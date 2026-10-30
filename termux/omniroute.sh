@@ -90,8 +90,11 @@ npm_install_omniroute() { # npm_install_omniroute VERSION
   mkdir -p "$PREFIX"
   local npm_major args=(install --prefix "$PREFIX" --no-audit --no-fund "omniroute@$1")
   npm_major="$(npm -v | cut -d. -f1)"
-  # npm >= 11 blocks lifecycle scripts unless allowed (upstream README, Quick Start).
-  [ "$npm_major" -ge 11 ] && args+=("--allow-scripts=$ALLOW_SCRIPTS")
+  # npm >= 11 blocks lifecycle scripts unless allowed (upstream README, Quick Start). Recent npm 11 REJECTS the --allow-scripts flag for a
+  # project-scoped install (EALLOWSCRIPTS; found by CI on npm 11.19), so the allow-list goes into the prefix's own .npmrc, which every npm 11 reads.
+  if [ "$npm_major" -ge 11 ]; then
+    { grep -v '^allow-scripts=' "$PREFIX/.npmrc" 2>/dev/null; printf 'allow-scripts=%s\n' "$ALLOW_SCRIPTS"; } > "$PREFIX/.npmrc.new" && mv "$PREFIX/.npmrc.new" "$PREFIX/.npmrc"
+  fi
   args+=(--fetch-retries=5 --fetch-retry-mintimeout=4000 --fetch-retry-maxtimeout=60000)
   retry_cmd 3 npm "${args[@]}"
   node_version > "$GW_STATE_DIR/omniroute.node_version"

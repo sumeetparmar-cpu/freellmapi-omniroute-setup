@@ -6,7 +6,8 @@ TMP="$(mktemp -d)"; PASS=0; FAIL=0; PIDS=()
 cleanup() {
   local p; for p in "${PIDS[@]}"; do kill "$p" 2>/dev/null; done
   GW_HOME="$TMP/gw" bash "$ROOT/termux/free-guard.sh" stop >/dev/null 2>&1; rm -rf "$TMP"
-  echo "free-guard (termux): passed=$PASS failed=$FAIL"; [ "$FAIL" -eq 0 ]
+  echo "free-guard (termux): passed=$PASS failed=$FAIL"
+  [ "$FAIL" -eq 0 ] || exit 1   # an EXIT trap must call exit: bash ignores its last status otherwise (a failing run would report success)
 }
 trap cleanup EXIT
 ck() { local n="$1"; shift; if "$@" >"$TMP/out" 2>&1; then PASS=$((PASS+1)); echo "ok   - $n"; else FAIL=$((FAIL+1)); echo "FAIL - $n"; sed 's/^/       /' "$TMP/out" | tail -8; fi; }

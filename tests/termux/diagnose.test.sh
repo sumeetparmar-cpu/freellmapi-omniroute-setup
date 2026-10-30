@@ -2,7 +2,8 @@
 # termux/diagnose.sh must be read-only and secret-free. Builds a fake "phone" (a partial install with secret-looking files) and checks both.
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-TMP="$(mktemp -d)"; PASS=0; FAIL=0; trap 'rm -rf "$TMP"; echo "diagnose: passed=$PASS failed=$FAIL"; [ "$FAIL" -eq 0 ]' EXIT
+TMP="$(mktemp -d)"; PASS=0; FAIL=0; cleanup() { rm -rf "$TMP"; echo "diagnose: passed=$PASS failed=$FAIL"; [ "$FAIL" -eq 0 ] || exit 1; }   # an EXIT trap must call exit (its last status is ignored)
+trap cleanup EXIT
 ck() { local n="$1"; shift; if "$@" >"$TMP/out" 2>&1; then PASS=$((PASS+1)); echo "ok   - $n"; else FAIL=$((FAIL+1)); echo "FAIL - $n"; sed 's/^/       /' "$TMP/out" | tail -6; fi; }
 export HOME="$TMP/home"; export GW_HOME="$HOME/llm-gateways"; mkdir -p "$GW_HOME"/{config,state,freellmapi/server/dist,freellmapi-data}
 SECRET="sup3rS3cretValue-$(date +%s%N | sha256sum | cut -c1-16)"
