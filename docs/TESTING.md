@@ -13,9 +13,10 @@ npm 10.9.4 / 11.6.1, PowerShell 7.5.0 (Linux build), ShellCheck. Upstream versio
 |---|---|---|
 | ShellCheck (`-S warning`) on all `.sh` | `shellcheck -x -S warning termux/*.sh termux/lib/common.sh tests/termux/*.sh scripts/*.sh` | clean |
 | PowerShell parser on all `.ps1` | `[Parser]::ParseFile(...)` | 0 errors |
-| Termux scripts | `bash tests/termux/run-tests.sh` | **74 passed, 0 failed** |
+| Termux scripts | `bash tests/termux/run-tests.sh` | **87 passed, 0 failed** |
+| `quota-report` reporter (Node 24 and Node 22.22.0) | `node --test tests/quota/quota-report.test.mjs` | **22 passed, 0 failed** (also run inside the bash suite) |
 | Secret scanner | `bash tests/termux/test-check-secrets.sh` | **11 passed, 0 failed** |
-| PowerShell scripts (pwsh 7.5 on Linux) | `pwsh -File tests/windows/run-tests.ps1` | **65 passed, 0 failed** |
+| PowerShell scripts (pwsh 7.5 on Linux) | `pwsh -File tests/windows/run-tests.ps1` | **75 passed, 0 failed** |
 
 What they cover: Node-range logic (incl. the 22.22.0 / 23.x gaps), port conflict/equality/range checks, env-file
 permissions and non-executing parsing, backup/restore round-trip, restore path allow-listing (`..`, foreign paths,
@@ -89,3 +90,20 @@ pwsh -NoProfile -File tests/windows/run-tests.ps1
 # optional live run with throwaway state and different ports:
 GW_HOME=$(mktemp -d) FREELLMAPI_PORT=3201 OMNIROUTE_PORT=20228 ./termux/freellmapi.sh install   # etc.
 ```
+
+## quota-report
+
+Added after the first report. Covered by `tests/quota/quota-report.test.mjs` (22 tests) plus wrapper tests in both suites, all
+against **mock** status endpoints (`tests/quota/mock-gateways.mjs`): success, missing quotas, authentication errors (wrong credential,
+server-side 401, no credential), HTTP 429 with `Retry-After` (no retry), malformed JSON, wrong-typed JSON, stale ledger / expired
+windows / old caches, redirects, unreachable gateway, and argument validation. Every scenario also asserts: only `GET`, only allow-listed
+paths, no generation path, every line carries one of the four labels, `modelRequestsSent: 0`, and **no credential or planted
+canary secret appears in text or JSON output**. Shared pools are counted once, and estimates never appear in provider-reported lines.
+
+Also run once against the **real** sandbox instances (FreeLLMAPI v0.16.12 and OmniRoute 3.8.52 with a read-scope token, mock provider
+only): response shapes matched, and the token did not appear in the output. This is **not** evidence about any real provider quota:
+no real provider was ever connected, so provider-reported quota has only been exercised with mock data.
+
+Findings from that run, now handled: OmniRoute withholds month-to-date usage from access-token callers (reported Unknown; the rolling
+30-day analytics are used instead); the unauthenticated health endpoint omits the version (not printed); `scrub()` was mis-called with a
+length argument (fixed); PowerShell treated redirected stdin as interactive (new `Test-Interactive`); a startup race in the port test.

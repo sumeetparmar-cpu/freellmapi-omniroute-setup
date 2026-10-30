@@ -39,9 +39,10 @@ Node 22.22.0 and 24.11.0; OmniRoute needs 24.x or ≥ 22.22.2 (the audit script 
 termux/   freellmapi.sh  omniroute.sh  audit-env.sh  lib/common.sh     # Android/Termux (bash)
 windows/  freellmapi.ps1 omniroute.ps1 audit-env.ps1 lib/Common.ps1    # Windows PowerShell 5.1 / 7+
 config/   gateways.env.example                                         # non-secret overrides (ports, pins)
+tools/    quota-report.mjs                                             # read-only usage/quota report (used by both platforms)
 scripts/  check-secrets.sh                                             # pre-commit secret scan
 tests/    termux/ windows/ mock-openai-server.mjs                      # offline test suites
-docs/     PROVIDERS-AND-COSTS.md  ROLLBACK.md  TESTING.md
+docs/     PROVIDERS-AND-COSTS.md  ROLLBACK.md  QUOTA-REPORT.md  TESTING.md
 ```
 
 State lives in `~/llm-gateways` (Termux) or `%USERPROFILE%\llm-gateways` (Windows); override with `GW_HOME`.
@@ -108,6 +109,7 @@ that backup, rollback and port control behave the same on both platforms. Do not
 | Roll back | `./termux/<gw>.sh rollback [--with-data]` | `.\windows\<gw>.ps1 rollback [-WithData]` |
 | Node version changed | `./termux/<gw>.sh rebuild` | `.\windows\<gw>.ps1 rebuild` |
 | Logs | `./termux/<gw>.sh logs` | `.\windows\<gw>.ps1 logs` |
+| Usage / quota / availability report (read-only, no model requests) | `./termux/<gw>.sh quota-report` | `.\windows\<gw>.ps1 quota-report` |
 
 Pin versions for repeatability in `llm-gateways/config/gateways.env` (see `config/gateways.env.example`):
 `FREELLMAPI_REF=v0.16.12`, `OMNIROUTE_VERSION=3.8.52`.

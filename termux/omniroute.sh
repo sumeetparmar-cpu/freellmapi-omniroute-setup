@@ -4,7 +4,7 @@
 # Independent from FreeLLMAPI: own prefix, data dir, env file, PID, logs, port (default 20128).
 #
 #   ./omniroute.sh install | start | stop | restart | status | health | test-model | credentials
-#                  backup | list-backups | restore <archive> | update | rollback | rebuild | logs | uninstall
+#                  backup | list-backups | restore <archive> | update | rollback | rebuild | quota-report | logs | uninstall
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/common.sh
@@ -25,11 +25,13 @@ usage() {
   cat <<'EOF'
 
 Options: --yes  --version <npm version>  --key-file <file>  --model <provider/model> (required for test-model)  --base-url <url>  --with-data  --archive <file>
+quota-report options: --json  --max-age-min <N>  --token-file <file>   (read-only; sends no model requests)
+quota-report credential: env OMNIROUTE_MGMT_TOKEN = a READ-scope access token (Dashboard -> Settings -> Access Tokens), or --token-file, or hidden prompt (Enter skips).
 Key for test-model: env OMNIROUTE_KEY (create one in Dashboard -> Endpoints), --key-file, or hidden prompt. Never stored here.
 EOF
 }
 
-ASSUME_YES=0; KEY_FILE=""; MODEL=""; WITH_DATA=0; ARCHIVE=""
+ASSUME_YES=0; KEY_FILE=""; MODEL=""; WITH_DATA=0; ARCHIVE=""; QR_ARGS=(); TOKEN_FILE=""
 ACTION="${1:-}"; [ $# -gt 0 ] && shift
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -40,6 +42,9 @@ while [ $# -gt 0 ]; do
     --base-url) BASE_URL="$2"; shift ;;
     --with-data) WITH_DATA=1 ;;
     --archive) ARCHIVE="$2"; shift ;;
+    --json|--list-models) QR_ARGS+=("$1") ;;
+    --max-age-min) QR_ARGS+=(--max-age-min "$2"); shift ;;
+    --token-file) TOKEN_FILE="$2"; shift ;;
     -h|--help) usage; exit 0 ;;
     *) ARCHIVE="$1" ;;
   esac
@@ -208,6 +213,17 @@ cmd_rollback() {
   ok "rolled back to $(installed_version). Start with: $0 start"
 }
 
+# Read-only quota/usage report (tools/quota-report.mjs): GET requests to documented status endpoints
+# only, never a model request. The token goes to Node via the environment, never argv or disk.
+cmd_quota_report() {
+  have node || die "node not found"
+  local tok="${OMNIROUTE_MGMT_TOKEN:-}"
+  if [ -z "$tok" ] && [ -n "$TOKEN_FILE" ]; then [ -f "$TOKEN_FILE" ] || die "token file not found: $TOKEN_FILE"; tok="$(head -n1 "$TOKEN_FILE")"; fi
+  if [ -z "$tok" ] && [ -t 0 ]; then read -r -s -p "Read-scope access token (input hidden; Enter to skip): " tok; printf '\n' >&2; fi
+  [ -n "$tok" ] || warn "no OMNIROUTE_MGMT_TOKEN: only public health endpoints can be reported; the rest will show as Unknown"
+  OMNIROUTE_MGMT_TOKEN="$tok" node "$HERE/../tools/quota-report.mjs" --gateway omniroute --base-url "$BASE_URL" ${QR_ARGS[@]+"${QR_ARGS[@]}"}
+}
+
 cmd_logs() { tail -n "${LINES:-80}" "$LOG" 2>/dev/null || info "no log yet ($LOG)"; }
 
 cmd_uninstall() {
@@ -220,7 +236,7 @@ case "$ACTION" in
   install) cmd_install ;; start) cmd_start ;; stop) cmd_stop ;; restart) cmd_restart ;;
   status) cmd_status ;; health) cmd_health ;; test-model) cmd_test_model ;; credentials) cmd_credentials ;;
   backup) cmd_backup ;; list-backups) cmd_list_backups ;; restore) cmd_restore ;;
-  update) cmd_update ;; rollback) cmd_rollback ;; rebuild) cmd_rebuild ;; logs) cmd_logs ;; uninstall) cmd_uninstall ;;
+  update) cmd_update ;; rollback) cmd_rollback ;; rebuild) cmd_rebuild ;; quota-report) cmd_quota_report ;; logs) cmd_logs ;; uninstall) cmd_uninstall ;;
   ''|help|-h|--help) usage ;;
   *) usage; exit 2 ;;
 esac

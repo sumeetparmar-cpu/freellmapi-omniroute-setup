@@ -4,7 +4,7 @@
 # Independent from OmniRoute: own dir, data, env file, PID, logs, port (default 3001).
 #
 #   ./freellmapi.sh install | start | stop | restart | status | health | test-model
-#                   backup | list-backups | restore <archive> | update | rollback | rebuild | logs | uninstall
+#                   backup | list-backups | restore <archive> | update | rollback | rebuild | quota-report | logs | uninstall
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/common.sh
@@ -22,11 +22,12 @@ BASE_URL="http://127.0.0.1:$PORT"
 usage() { sed -n '2,8p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; cat <<EOF
 
 Options: --yes  --ref <git ref>  --key-file <file>  --model <id>  --base-url <url>  --with-data  --archive <file>
+quota-report options: --json  --list-models   (read-only; sends no model requests)
 Key for test-model: env FREELLMAPI_KEY, --key-file, or hidden prompt. It is never stored by these scripts.
 EOF
 }
 
-ASSUME_YES=0; KEY_FILE=""; MODEL="auto"; WITH_DATA=0; ARCHIVE=""
+ASSUME_YES=0; KEY_FILE=""; MODEL="auto"; WITH_DATA=0; ARCHIVE=""; QR_ARGS=()
 ACTION="${1:-}"; [ $# -gt 0 ] && shift
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -37,6 +38,7 @@ while [ $# -gt 0 ]; do
     --base-url) BASE_URL="$2"; shift ;;
     --with-data) WITH_DATA=1 ;;
     --archive) ARCHIVE="$2"; shift ;;
+    --json|--list-models) QR_ARGS+=("$1") ;;
     -h|--help) usage; exit 0 ;;
     *) ARCHIVE="$1" ;;   # positional: restore <archive>
   esac
@@ -199,6 +201,14 @@ cmd_rollback() {
   ok "rolled back to ${sha:0:12}. Start with: $0 start"
 }
 
+# Read-only quota/usage/availability report (tools/quota-report.mjs): GET requests to documented status
+# endpoints only, never a model request. The key goes to Node via the environment, never argv or disk.
+cmd_quota_report() {
+  have node || die "node not found"
+  local key; key="$(read_api_key FREELLMAPI_KEY "$KEY_FILE")"
+  FREELLMAPI_KEY="$key" node "$HERE/../tools/quota-report.mjs" --gateway freellmapi --base-url "$BASE_URL" ${QR_ARGS[@]+"${QR_ARGS[@]}"}
+}
+
 cmd_logs() { tail -n "${LINES:-80}" "$LOG" 2>/dev/null || info "no log yet ($LOG)"; }
 
 cmd_uninstall() {
@@ -211,7 +221,7 @@ case "$ACTION" in
   install) cmd_install ;; start) cmd_start ;; stop) cmd_stop ;; restart) cmd_restart ;;
   status) cmd_status ;; health) cmd_health ;; test-model) cmd_test_model ;;
   backup) cmd_backup ;; list-backups) cmd_list_backups ;; restore) cmd_restore ;;
-  update) cmd_update ;; rollback) cmd_rollback ;; rebuild) cmd_rebuild ;; logs) cmd_logs ;; uninstall) cmd_uninstall ;;
+  update) cmd_update ;; rollback) cmd_rollback ;; rebuild) cmd_rebuild ;; quota-report) cmd_quota_report ;; logs) cmd_logs ;; uninstall) cmd_uninstall ;;
   ''|help|-h|--help) usage ;;
   *) usage; exit 2 ;;
 esac

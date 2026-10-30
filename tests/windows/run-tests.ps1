@@ -23,7 +23,8 @@ function T([string]$Name, [scriptblock]$Body) {
 function Throws([scriptblock]$Body) { try { & $Body *> $null; $false } catch { $true } }
 function Run-Script([string]$File, [string[]]$ScriptArgs, [hashtable]$Env = @{}) {
     $saved = @{}; foreach ($k in $Env.Keys) { $saved[$k] = [Environment]::GetEnvironmentVariable($k); [Environment]::SetEnvironmentVariable($k, $Env[$k]) }
-    try { $out = & $Shell -NoProfile -File (Join-Path $Root "windows/$File") @ScriptArgs 2>&1 | Out-String; [pscustomobject]@{ Code = $LASTEXITCODE; Out = $out } }
+    # piped stdin => the child is non-interactive, as in CI
+    try { $out = '' | & $Shell -NoProfile -File (Join-Path $Root "windows/$File") @ScriptArgs 2>&1 | Out-String; [pscustomobject]@{ Code = $LASTEXITCODE; Out = $out } }
     finally { foreach ($k in $saved.Keys) { if ($null -eq $saved[$k]) { Remove-Item "Env:$k" -ErrorAction SilentlyContinue } else { [Environment]::SetEnvironmentVariable($k, $saved[$k]) } } }
 }
 function Start-Mock([int]$Port, [string]$Mode) {
@@ -129,6 +130,26 @@ try {
     Set-Content (Join-Path $Tmp 'k') 'filekey'
     T 'Get-ApiKey from file'             { (Get-ApiKey 'GW_NOPE' (Join-Path $Tmp 'k')) -eq 'filekey' }
     T 'Get-ApiKey missing file refused'  { Throws { Get-ApiKey 'GW_NOPE' (Join-Path $Tmp 'absent') } }
+
+    Write-Host '# quota-report wrappers (against mock status endpoints; read-only)'
+    $canUni  = & node --input-type=module -e "import('$((Join-Path $Root 'tests/quota/mock-gateways.mjs').Replace('\\','/'))').then(m=>process.stdout.write(m.CANARY.unified))"
+    $canMgmt = & node --input-type=module -e "import('$((Join-Path $Root 'tests/quota/mock-gateways.mjs').Replace('\\','/'))').then(m=>process.stdout.write(m.CANARY.mgmt))"
+    foreach ($spec in @(@('freellmapi', 18321, 'api/ping'), @('omniroute', 18322, 'api/health/ping'))) {
+        $mock += Start-Process node -ArgumentList @((Join-Path $Root 'tests/quota/mock-gateways.mjs'), $spec[0], 'ok', $spec[1]) -PassThru -RedirectStandardOutput (Join-Path $Tmp "qm$($spec[1]).log")
+        for ($i = 0; $i -lt 30 -and (Get-HttpStatus "http://127.0.0.1:$($spec[1])/$($spec[2])") -eq 0; $i++) { Start-Sleep -Milliseconds 200 }
+    }
+    $flUrl = 'http://127.0.0.1:18321'; $omUrl = 'http://127.0.0.1:18322'
+    T 'freellmapi quota-report shows labelled provider quota' { $r = Run-Script 'freellmapi.ps1' @('quota-report', '-BaseUrl', $flUrl) @{ FREELLMAPI_KEY = $canUni }; ($r.Code -eq 0) -and ($r.Out -match '\[PROVIDER\] pool groq::account: requests used 600') }
+    T 'freellmapi quota-report never prints the key' { $r = Run-Script 'freellmapi.ps1' @('quota-report', '-BaseUrl', $flUrl) @{ FREELLMAPI_KEY = $canUni }; $r.Out -notmatch 'C4N4RY' }
+    T 'freellmapi quota-report -Json is valid and read-only' { $r = Run-Script 'freellmapi.ps1' @('quota-report', '-BaseUrl', $flUrl, '-Json') @{ FREELLMAPI_KEY = $canUni }; $j = $r.Out | ConvertFrom-Json; ($j.readOnly -eq $true) -and ($j.modelRequestsSent -eq 0) }
+    T 'freellmapi quota-report wrong key -> Unknown, exit 0' { $r = Run-Script 'freellmapi.ps1' @('quota-report', '-BaseUrl', $flUrl) @{ FREELLMAPI_KEY = 'wrong' }; ($r.Code -eq 0) -and ($r.Out -match 'UNKNOWN\] authentication rejected') }
+    T 'freellmapi quota-report without key (non-interactive) fails' { (Run-Script 'freellmapi.ps1' @('quota-report', '-BaseUrl', $flUrl) @{ FREELLMAPI_KEY = '' }).Code -ne 0 }
+    T 'omniroute quota-report shows provider quota with reset' { $r = Run-Script 'omniroute.ps1' @('quota-report', '-BaseUrl', $omUrl) @{ OMNIROUTE_MGMT_TOKEN = $canMgmt }; ($r.Code -eq 0) -and ($r.Out -match 'Monthly: 87.5% remaining') -and ($r.Out -match '\[ESTIMATE\] catalog-wide') }
+    T 'omniroute quota-report never prints the token' { $r = Run-Script 'omniroute.ps1' @('quota-report', '-BaseUrl', $omUrl) @{ OMNIROUTE_MGMT_TOKEN = $canMgmt }; $r.Out -notmatch 'C4N4RY|ST0REDK3Y' }
+    Set-Content (Join-Path $Tmp 'om.tok') $canMgmt
+    T 'omniroute quota-report -TokenFile' { $r = Run-Script 'omniroute.ps1' @('quota-report', '-BaseUrl', $omUrl, '-TokenFile', (Join-Path $Tmp 'om.tok')) @{ OMNIROUTE_MGMT_TOKEN = '' }; $r.Out -match 'Monthly: 87.5% remaining' }
+    T 'omniroute quota-report without token still reports public health' { $r = Run-Script 'omniroute.ps1' @('quota-report', '-BaseUrl', $omUrl) @{ OMNIROUTE_MGMT_TOKEN = '' }; $r.Out -match 'no credential supplied \(OMNIROUTE_MGMT_TOKEN not set\)' }
+    T 'omniroute quota-report -MaxAgeMin passes through' { $r = Run-Script 'omniroute.ps1' @('quota-report', '-BaseUrl', $omUrl, '-MaxAgeMin', '5') @{ OMNIROUTE_MGMT_TOKEN = $canMgmt }; $r.Out -match 'ollama-cloud "cloud": stale' }
 
     Write-Host '# CLI behaviour'
     foreach ($g in 'freellmapi', 'omniroute') {

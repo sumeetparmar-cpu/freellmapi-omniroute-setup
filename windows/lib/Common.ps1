@@ -35,6 +35,8 @@ function Write-Warn($m) { Write-Host "[warn] $m" -ForegroundColor Yellow }
 function Write-Err($m)  { Write-Host "[fail] $m" -ForegroundColor Red }
 function Stop-Script([string]$m) { Write-Err $m; throw $m }
 
+# [Environment]::UserInteractive stays true even when stdin is redirected (CI, pipes), so also check the console.
+function Test-Interactive { [Environment]::UserInteractive -and -not [Console]::IsInputRedirected }
 function Test-Command([string]$n) { [bool](Get-Command $n -ErrorAction SilentlyContinue) }
 
 function Initialize-Dirs {
@@ -266,7 +268,7 @@ function Get-LatestBackup([string]$Name, [string]$Pattern = '*.zip') {
 }
 function Confirm-Action([string]$Question, [bool]$AssumeYes) {
     if ($AssumeYes) { return $true }
-    if (-not [Environment]::UserInteractive) { Stop-Script "non-interactive: pass -Yes to confirm: $Question" }
+    if (-not (Test-Interactive)) { Stop-Script "non-interactive: pass -Yes to confirm: $Question" }
     (Read-Host "$Question [y/N]") -match '^[yY]'
 }
 
@@ -278,7 +280,7 @@ function Get-ApiKey([string]$EnvVar, [string]$KeyFile) {
         $k = (Get-Content $KeyFile -TotalCount 1).Trim()
     }
     if (-not $k) {
-        if (-not [Environment]::UserInteractive) { Stop-Script "No API key. Set `$env:$EnvVar, pass -KeyFile, or run interactively." }
+        if (-not (Test-Interactive)) { Stop-Script "No API key. Set `$env:$EnvVar, pass -KeyFile, or run interactively." }
         $sec = Read-Host 'Paste API key (input hidden)' -AsSecureString
         $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($sec)
         try { $k = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr) } finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }

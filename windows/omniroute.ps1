@@ -16,7 +16,7 @@
 param(
     [Parameter(Position = 0)]
     [ValidateSet('install', 'start', 'stop', 'restart', 'status', 'health', 'test-model', 'credentials', 'backup',
-                 'list-backups', 'restore', 'update', 'rollback', 'rebuild', 'logs', 'uninstall', 'help')]
+                 'list-backups', 'restore', 'update', 'rollback', 'rebuild', 'quota-report', 'logs', 'uninstall', 'help')]
     [string]$Action = 'help',
     [string]$Version,
     [string]$KeyFile,
@@ -24,7 +24,10 @@ param(
     [string]$BaseUrl,
     [string]$Archive,
     [switch]$WithData,
-    [switch]$Yes
+    [switch]$Yes,
+    [switch]$Json,
+    [double]$MaxAgeMin = 0,
+    [string]$TokenFile
 )
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'lib/Common.ps1')
@@ -211,6 +214,28 @@ function Invoke-Rollback {
     Write-Ok "rolled back to $(Get-InstalledVersion). Start with: .\omniroute.ps1 start"
 }
 
+# Read-only quota/usage report (tools/quota-report.mjs): GET requests to documented status endpoints only,
+# never a model request. Credential: a READ-scope access token (Dashboard -> Settings -> Access Tokens) from
+# $env:OMNIROUTE_MGMT_TOKEN, -TokenFile, or a hidden prompt (Enter skips). Passed to Node via the environment only.
+function Invoke-QuotaReport {
+    if (-not (Test-Command node)) { Stop-Script 'node not found' }
+    $tok = $env:OMNIROUTE_MGMT_TOKEN
+    if (-not $tok -and $TokenFile) {
+        if (-not (Test-Path $TokenFile)) { Stop-Script "token file not found: $TokenFile" }
+        $tok = (Get-Content $TokenFile -TotalCount 1).Trim()
+    }
+    if (-not $tok -and (Test-Interactive)) {
+        $sec = Read-Host 'Read-scope access token (input hidden; Enter to skip)' -AsSecureString
+        $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($sec)
+        try { $tok = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr) } finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
+    }
+    if (-not $tok) { Write-Warn 'no OMNIROUTE_MGMT_TOKEN: only public health endpoints can be reported; the rest will show as Unknown' }
+    $qa = @((Join-Path $PSScriptRoot '../tools/quota-report.mjs'), '--gateway', 'omniroute', '--base-url', $BaseUrl)
+    if ($Json) { $qa += '--json' }
+    if ($MaxAgeMin -gt 0) { $qa += @('--max-age-min', "$MaxAgeMin") }
+    Invoke-WithEnv ([ordered]@{ OMNIROUTE_MGMT_TOKEN = [string]$tok }) { Invoke-Native 'node' $qa }
+}
+
 function Invoke-Uninstall {
     if (-not (Confirm-Action "Remove OmniRoute code at $Prefix? (config, data and backups are KEPT)" $Yes.IsPresent)) { Stop-Script 'aborted' }
     Stop-GwProcess $Name $Port
@@ -233,6 +258,7 @@ switch ($Action) {
     'update'       { Invoke-Update }
     'rollback'     { Invoke-Rollback }
     'rebuild'      { Invoke-Rebuild }
+    'quota-report' { Invoke-QuotaReport }
     'logs'         { if (Test-Path $Log) { Get-Content $Log -Tail 80 } else { Write-Info "no log yet ($Log)" } }
     'uninstall'    { Invoke-Uninstall }
     default        { Get-Help $PSCommandPath -Examples }

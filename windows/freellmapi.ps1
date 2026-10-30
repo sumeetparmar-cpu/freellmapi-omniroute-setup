@@ -16,7 +16,7 @@
 param(
     [Parameter(Position = 0)]
     [ValidateSet('install', 'start', 'stop', 'restart', 'status', 'health', 'test-model', 'backup', 'list-backups',
-                 'restore', 'update', 'rollback', 'rebuild', 'logs', 'uninstall', 'help')]
+                 'restore', 'update', 'rollback', 'rebuild', 'quota-report', 'logs', 'uninstall', 'help')]
     [string]$Action = 'help',
     [string]$Ref,
     [string]$KeyFile,
@@ -24,7 +24,9 @@ param(
     [string]$BaseUrl,
     [string]$Archive,
     [switch]$WithData,
-    [switch]$Yes
+    [switch]$Yes,
+    [switch]$Json,
+    [switch]$ListModels
 )
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'lib/Common.ps1')
@@ -203,6 +205,17 @@ function Invoke-Rollback {
     Write-Ok "rolled back to $($sha.Substring(0, 12)). Start with: .\freellmapi.ps1 start"
 }
 
+# Read-only quota/usage/availability report (tools/quota-report.mjs): GET requests to documented status
+# endpoints only, never a model request. The key goes to Node via the environment, never argv or disk.
+function Invoke-QuotaReport {
+    if (-not (Test-Command node)) { Stop-Script 'node not found' }
+    $key = Get-ApiKey 'FREELLMAPI_KEY' $KeyFile
+    $qa = @((Join-Path $PSScriptRoot '../tools/quota-report.mjs'), '--gateway', 'freellmapi', '--base-url', $BaseUrl)
+    if ($Json) { $qa += '--json' }
+    if ($ListModels) { $qa += '--list-models' }
+    Invoke-WithEnv ([ordered]@{ FREELLMAPI_KEY = $key }) { Invoke-Native 'node' $qa }
+}
+
 function Invoke-Uninstall {
     if (-not (Confirm-Action "Remove FreeLLMAPI code at $Src? (config, data and backups are KEPT)" $Yes.IsPresent)) { Stop-Script 'aborted' }
     Stop-GwProcess $Name $Port
@@ -224,6 +237,7 @@ switch ($Action) {
     'update'       { Invoke-Update }
     'rollback'     { Invoke-Rollback }
     'rebuild'      { Invoke-Rebuild }
+    'quota-report' { Invoke-QuotaReport }
     'logs'         { if (Test-Path $Log) { Get-Content $Log -Tail 80 } else { Write-Info "no log yet ($Log)" } }
     'uninstall'    { Invoke-Uninstall }
     default        { Get-Help $PSCommandPath -Examples }

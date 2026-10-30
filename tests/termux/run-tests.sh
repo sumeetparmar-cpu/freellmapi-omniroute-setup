@@ -41,7 +41,7 @@ tn "equal ports refused" bash -c ". '$ROOT/termux/lib/common.sh'; FREELLMAPI_POR
 tn "non-numeric port refused" bash -c ". '$ROOT/termux/lib/common.sh'; FREELLMAPI_PORT=abc assert_distinct_ports"
 tn "privileged port refused" bash -c ". '$ROOT/termux/lib/common.sh'; FREELLMAPI_PORT=80 assert_distinct_ports"
 node -e 'require("net").createServer().listen(0,"127.0.0.1",function(){console.log(this.address().port)})' > "$TMP/port" &
-MOCK_PIDS+=("$!"); sleep 0.6
+MOCK_PIDS+=("$!"); for _ in $(seq 50); do [ -s "$TMP/port" ] && break; sleep 0.1; done
 t "port_in_use detects listener" port_in_use "$(cat "$TMP/port")"
 tn "port_in_use false for free port" port_in_use 1
 
@@ -105,6 +105,27 @@ t  "read_api_key from env"           bash -c ". '$ROOT/termux/lib/common.sh'; K=
 printf 'filekey\n' > "$TMP/k"
 t  "read_api_key from file"          bash -c ". '$ROOT/termux/lib/common.sh'; [ \"\$(read_api_key NOPE '$TMP/k')\" = filekey ]"
 tn "read_api_key non-interactive w/o key fails" bash -c ". '$ROOT/termux/lib/common.sh'; unset NOPE; read_api_key NOPE < /dev/null"
+
+echo "# quota-report wrappers (against mock status endpoints; read-only)"
+CAN_UNI="$(node --input-type=module -e "import('$ROOT/tests/quota/mock-gateways.mjs').then(m=>process.stdout.write(m.CANARY.unified))")"
+CAN_MGMT="$(node --input-type=module -e "import('$ROOT/tests/quota/mock-gateways.mjs').then(m=>process.stdout.write(m.CANARY.mgmt))")"
+start_gw_mock() { node "$ROOT/tests/quota/mock-gateways.mjs" "$1" "$2" "$3" >/dev/null 2>&1 & MOCK_PIDS+=("$!"); for _ in $(seq 25); do [ "$(http_code "http://127.0.0.1:$3/$4")" != 000 ] && return; sleep 0.2; done; }
+start_gw_mock freellmapi ok 18311 api/ping; start_gw_mock omniroute ok 18312 api/health/ping
+FLQ="bash $ROOT/termux/freellmapi.sh quota-report --base-url http://127.0.0.1:18311"
+OMQ="bash $ROOT/termux/omniroute.sh quota-report --base-url http://127.0.0.1:18312"
+t  "freellmapi quota-report shows labelled provider quota" bash -c "FREELLMAPI_KEY='$CAN_UNI' $FLQ | grep -q '\[PROVIDER\] pool groq::account: requests used 600'"
+t  "freellmapi quota-report never prints the key" bash -c "! FREELLMAPI_KEY='$CAN_UNI' $FLQ 2>&1 | grep -q 'C4N4RY'"
+t  "freellmapi quota-report --json is valid and read-only" bash -c "FREELLMAPI_KEY='$CAN_UNI' $FLQ --json | node -e 'const d=JSON.parse(require(\"fs\").readFileSync(0));process.exit(d.readOnly===true&&d.modelRequestsSent===0?0:1)'"
+t  "freellmapi quota-report --key-file" bash -c "printf '%s' '$CAN_UNI' > '$TMP/fl.key'; $FLQ --key-file '$TMP/fl.key' | grep -q 'ready models'"
+t  "freellmapi quota-report wrong key -> report with Unknown, exit 0" bash -c "FREELLMAPI_KEY=wrong $FLQ | grep -q 'UNKNOWN. authentication rejected'"
+tn "freellmapi quota-report without key (non-interactive) fails" bash -c "env -u FREELLMAPI_KEY $FLQ < /dev/null"
+t  "omniroute quota-report shows provider quota with reset" bash -c "OMNIROUTE_MGMT_TOKEN='$CAN_MGMT' $OMQ | grep -q 'Monthly: 87.5% remaining'"
+t  "omniroute quota-report keeps estimates separate" bash -c "OMNIROUTE_MGMT_TOKEN='$CAN_MGMT' $OMQ | grep -q '\[ESTIMATE\] catalog-wide'"
+t  "omniroute quota-report never prints the token" bash -c "! OMNIROUTE_MGMT_TOKEN='$CAN_MGMT' $OMQ 2>&1 | grep -qE 'C4N4RY|ST0REDK3Y'"
+t  "omniroute quota-report --token-file" bash -c "printf '%s' '$CAN_MGMT' > '$TMP/om.tok'; $OMQ --token-file '$TMP/om.tok' | grep -q 'Monthly: 87.5% remaining'"
+t  "omniroute quota-report without token still reports public health" bash -c "env -u OMNIROUTE_MGMT_TOKEN $OMQ < /dev/null 2>&1 | grep -q 'no credential supplied (OMNIROUTE_MGMT_TOKEN not set)'"
+t  "omniroute quota-report --max-age-min passes through" bash -c "OMNIROUTE_MGMT_TOKEN='$CAN_MGMT' $OMQ --max-age-min 5 | grep -q 'ollama-cloud \"cloud\": stale'"
+t  "quota-report node unit tests" node --test "$ROOT/tests/quota/quota-report.test.mjs"
 
 echo "# CLI behaviour"
 for g in freellmapi omniroute; do
