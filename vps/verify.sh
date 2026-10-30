@@ -15,6 +15,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BASE=""
 while [ $# -gt 0 ]; do case "$1" in --baseline) BASE="$2"; shift;; --root) LLM_ROOT="$2"; shift;; *) die "unknown option $1";; esac; shift; done
 [ -f "$BASE" ] || die "usage: verify.sh --baseline SNAPSHOT"
+LOWPRIO=(); have nice && LOWPRIO+=(nice -n 19); have ionice && LOWPRIO+=(ionice -c3)
 FAILS=0; fail() { err "$*"; FAILS=$((FAILS+1)); }
 
 info "1/5 integrity of the existing server vs baseline"
@@ -23,7 +24,8 @@ info "1/5 integrity of the existing server vs baseline"
 info "2/5 files owned by the service users outside $LLM_ROOT"
 for gw in freellmapi omniroute; do
   u="$(gw_user "$gw")"; getent passwd "$u" >/dev/null || continue
-  stray="$(find / -xdev \( -path /proc -o -path /sys -o -path /run -o -path /tmp -o -path /var/tmp -o -path "$LLM_ROOT" \) -prune -o -user "$u" -print 2>/dev/null | head -n 5)"
+  # Lowest CPU/IO priority and no walking of container storage: this must not disturb the live services.
+  stray="$("${LOWPRIO[@]}" find / -xdev \( -path /proc -o -path /sys -o -path /run -o -path /tmp -o -path /var/tmp -o -path "$LLM_ROOT" -o -path /var/lib/docker -o -path /var/lib/containerd -o -path /snap \) -prune -o -user "$u" -print 2>/dev/null | head -n 5)"
   [ -z "$stray" ] && ok "$u owns nothing outside $LLM_ROOT" || fail "$u owns files outside $LLM_ROOT: $(echo "$stray" | tr '\n' ' ')"
 done
 

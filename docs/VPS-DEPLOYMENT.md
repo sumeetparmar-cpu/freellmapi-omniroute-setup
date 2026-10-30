@@ -75,7 +75,7 @@ Installs run as the service users, write only under their own directory, and gen
 ```
 Each `enable` starts the unit, waits up to 120 s for the liveness endpoint, then runs `verify.sh`. **If health or verification fails, that service is disabled again automatically.**
 `verify.sh` proves: the inventory matches the baseline (containers, volumes, networks, unit files, users, hashes of Caddyfile/sshd/sudoers/cron, watched paths), the service users own
-nothing outside `/srv/llm`, belong to no privileged group, and every socket they own is loopback-only on a configured port. Run it again any time:
+nothing outside `/srv/llm` (a niced, idle-IO `find` that skips `/proc /sys /run /tmp`, Docker/containerd storage and snaps; on a large disk the first run can take a minute or two), belong to no privileged group, and every socket they own is loopback-only on a configured port. Run it again any time:
 `./vps/verify.sh --baseline /root/llm-deploy/baseline.snap`.
 
 ### Stage G: first use (you, over an SSH tunnel)  [gate G6]
