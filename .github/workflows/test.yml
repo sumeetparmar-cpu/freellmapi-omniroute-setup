@@ -8,7 +8,11 @@ permissions:
 
 jobs:
   linux:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-26.04]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -18,7 +22,7 @@ jobs:
       - name: secret scan
         run: scripts/check-secrets.sh
       - name: Free-only guard + policy tests (loopback mocks, no credentials)
-        run: node --test tests/guard/*.test.mjs && bash tests/vps/free-install.test.sh
+        run: node --test tests/guard/*.test.mjs && bash tests/vps/free-install.test.sh && bash tests/vps/monitor-guard.test.sh
       - name: Termux script tests (run on Linux)
         run: bash tests/termux/run-tests.sh && bash tests/termux/test-check-secrets.sh
       - name: PowerShell tests under pwsh on Linux
@@ -41,7 +45,11 @@ jobs:
 
   # These two jobs make REAL system changes (test users, /srv/llm*); they run only on GitHub's disposable runner VMs and refuse to run elsewhere.
   vps-privileged:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-26.04]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -50,7 +58,11 @@ jobs:
         run: sudo env PATH="$PATH" LLM_TEST_ALLOW_SYSTEM_CHANGES=1 bash tests/vps/run-tests.sh
 
   vps-e2e:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-26.04]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
@@ -58,3 +70,22 @@ jobs:
         with: { node-version: '24' }
       - name: End-to-end rehearsal (pinned Node download, both real installs, quota-report, backup, verify)
         run: sudo env PATH="$PATH" LLM_TEST_ALLOW_SYSTEM_CHANGES=1 bash tests/vps/e2e-sandbox.sh
+
+  # Real systemd + the two hosted Ubuntu LTS images: installs the guard/audit units with free-install.sh, starts them, kills them,
+  # sandbox-probes them, drives the audit -> kill-switch loop. Also the Ubuntu 26.04 validation (real OS, real systemd).
+  systemd-guard:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-26.04]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '24' }
+      - name: Real-systemd guard/audit tests
+        run: sudo env PATH="$PATH" LLM_TEST_ALLOW_SYSTEM_CHANGES=1 REQUIRE_SYSTEMD=1 bash tests/vps/systemd-guard.test.sh
+      - name: Journal of the units (on failure)
+        if: failure()
+        run: sudo journalctl --no-pager -n 200 -u 'llm-guard-*' -u 'llm-free-audit-*' || true
