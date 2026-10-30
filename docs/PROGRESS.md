@@ -20,3 +20,7 @@ Resume rule: read the last "NEXT" line, continue from there. Facts here are date
 * DONE  OmniRoute 3.8.52 path: guard(3102) -> OmniRoute with real API key: allowed model refused by OmniRoute (provider_not_configured, no inference); paid/auto blocked by guard.
 * BLOCKED(credentials) OmniRoute real inference: needs a provider key; its ovhcloud connector requires an API key (OVH keys need a payment method) so no ₹0 keyless path. Groq/Gemini/Mistral/OpenRouter/Cloudflare keys not supplied.
 * NEXT  free-policy CLI tests; systemd units (guard + audit timer); docs; CI; restart/resume test.
+* DONE  vps/free-install.sh + vps/systemd/llm-guard.service, llm-free-audit.service/.timer (dry-run default, 6 units, not enabled). tests/vps/free-install.test.sh 16/16. ShellCheck clean (found+fixed SC2034).
+* DONE  Audit can log in with email+password from a 0600 env file (no stored token). Restart-recovery test (state file survives restart; corrupt state tolerated).
+* DONE  docs/FREE-ONLY.md runbook; PROVIDERS-AND-COSTS.md "Verified 2026-10-30" section with sources; TESTING.md "Free-only layer"; CI runs tests/guard + free-install test.
+* NEXT  full regression of existing suites; quota-report against live gateways; stop scratch gateways; push branch; final report. (VPS not accessed: no host/credentials in this environment.)

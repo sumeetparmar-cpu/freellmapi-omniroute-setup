@@ -54,6 +54,23 @@ routing by default, and connecting an account does not bypass that. It also list
 * **Vertex AI** — $300 signup credit needs a Google Cloud billing account; billing applies afterwards.
 * **Pollinations** and other **keyless** providers — no credential, but rate-limited, can reject third-party clients, and may be discontinued.
 
+## Verified against official sources on 2026-10-30 (Groq, Gemini, Mistral, OpenRouter, Cloudflare Workers AI, OVHcloud)
+
+Re-check before relying on any figure. "Account-dependent" means the number is shown only inside your provider account.
+
+| | Free access / card | Published limits | Data use | India |
+|---|---|---|---|---|
+| **Groq** | Free plan; card only to upgrade ([billing FAQs](https://console.groq.com/docs/billing-faqs)) | Free plan e.g. gpt-oss-120b/20b: 30 RPM, 1K RPD, 8K TPM, 200K TPD ([rate limits](https://console.groq.com/docs/rate-limits)) | Inference not retained by default; ZDR available ([your data](https://console.groq.com/docs/your-data)) | India billing rules exist; no eligibility list found |
+| **Gemini** | Free tier, no card; billing only to upgrade ([pricing](https://ai.google.dev/gemini-api/docs/pricing)) | Per-project; reset midnight Pacific; numbers in AI Studio ([limits](https://ai.google.dev/gemini-api/docs/rate-limits)) | **Free tier: used to improve products, human review** ([terms](https://ai.google.dev/gemini-api/terms)) | **Listed as available** ([regions](https://ai.google.dev/gemini-api/docs/available-regions)) |
+| **Mistral** | Free mode, no card ([quickstart](https://docs.mistral.ai/getting-started/quickstarts/studio/activate-and-generate-api-key)) | Free = lowest tier; numbers in Admin panel ([help](https://help.mistral.ai/en/articles/698531-why-am-i-hitting-api-rate-limits-and-how-do-i-increase-them)) | **Free mode may train; opt-out in Admin → Privacy** ([help](https://help.mistral.ai/en/articles/347617-do-you-use-my-user-data-to-train-your-artificial-intelligence-models)) | not stated |
+| **OpenRouter** | `:free` models; card requirement not stated | Free-model RPM/RPD depend on credits purchased ([limits](https://openrouter.ai/docs/api-reference/limits)); numbers did not render in the fetched page | OpenRouter does not train on inputs/outputs ([privacy](https://openrouter.ai/privacy)); upstream providers differ ([logging](https://openrouter.ai/docs/features/privacy-and-logging)) | not stated |
+| **Cloudflare** | Workers Free: 10,000 Neurons/day; 8 models need a paid method ([pricing](https://developers.cloudflare.com/workers-ai/platform/pricing/)) | Text generation 300 RPM ([limits](https://developers.cloudflare.com/workers-ai/platform/limits/)) | Zero retention, no training ([data usage](https://developers.cloudflare.com/workers-ai/platform/data-usage/)) | not stated |
+| **OVHcloud** | **Anonymous tier works with no key**; an API key needs a Public Cloud project with a payment method ([getting started](https://docs.ovhcloud.com/en/guides/public-cloud/ai-machine-learning/ai-endpoints-getting-started)) | Anonymous 2 req/min per IP per model; authenticated 400 req/min per project per model | "We do not store user data" | not stated |
+
+OVH API host (used by both gateways, confirmed with an unauthenticated `GET /v1/models` = 200, 22 models, all priced 0): `https://oai.endpoints.kepler.ai.cloud.ovh.net/v1`.
+Both gateways support all six: FreeLLMAPI v0.16.12 (`groq google mistral openrouter cloudflare ovh`) and OmniRoute 3.8.52 (`groq gemini mistral openrouter cloudflare-ai ovhcloud`).
+Enforcement of "free only" is described in [FREE-ONLY.md](FREE-ONLY.md).
+
 ## Behaviour observed while testing (OmniRoute `model=auto`)
 
 On a **fresh** OmniRoute install with no provider connected, a request with `model: "auto"` was routed to a

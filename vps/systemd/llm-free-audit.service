@@ -1,0 +1,26 @@
+# Read-only free-only audit of one gateway's configuration. Exit 1 = violations (also creates the kill-file so the guard
+# refuses inference), exit 2 = could not audit (guard keeps running; the unit shows as failed). Rendered by vps/free-install.sh.
+[Unit]
+Description=free-only audit for @GW@
+After=llm-@GW@.service
+
+[Service]
+Type=oneshot
+User=@USER@
+Group=@USER@
+WorkingDirectory=@LLM_ROOT@/@GW@
+Environment=HOME=@LLM_ROOT@/@GW@/home
+Environment=PATH=@LLM_ROOT@/runtime/node/bin:/usr/bin:/bin
+# Optional 0600 file owned by @USER@ holding ONE of: FREELLMAPI_ADMIN_TOKEN | FREELLMAPI_ADMIN_EMAIL+FREELLMAPI_ADMIN_PASSWORD | OMNIROUTE_MGMT_TOKEN
+EnvironmentFile=-@LLM_ROOT@/@GW@/config/free-audit.env
+ExecStart=@LLM_ROOT@/runtime/node/bin/node @LLM_ROOT@/toolkit/tools/free-policy.mjs @GW@ audit --base-url http://127.0.0.1:@PORT@ --flag-file @LLM_ROOT@/@GW@/state/free-audit.flag
+Nice=19
+UMask=0077
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=@LLM_ROOT@/@GW@
+PrivateTmp=yes
+PrivateDevices=yes
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX

@@ -17,6 +17,8 @@ jobs:
         run: shellcheck -x -S warning termux/*.sh termux/lib/common.sh tests/termux/*.sh scripts/*.sh vps/*.sh vps/lib/*.sh tests/vps/*.sh
       - name: secret scan
         run: scripts/check-secrets.sh
+      - name: Free-only guard + policy tests (loopback mocks, no credentials)
+        run: node --test tests/guard/*.test.mjs && bash tests/vps/free-install.test.sh
       - name: Termux script tests (run on Linux)
         run: bash tests/termux/run-tests.sh && bash tests/termux/test-check-secrets.sh
       - name: PowerShell tests under pwsh on Linux

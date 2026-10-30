@@ -125,3 +125,20 @@ What the real runs demonstrated (not just asserted): service users are system ac
 Defects found by these tests and fixed: service-user commands inherited the caller's working directory (on a real server that is `/root/llm-deploy`, mode 0700, so `git clone` and esbuild failed with 'Permission denied'): found by the first CI run of the end-to-end job on GitHub's runner, not by my sandbox; every service-user command now starts in its own directory (`env -C`), with a regression test and the rehearsal now starting from an inaccessible directory; the preflight's "propose a free port" call passed the alternatives as one argument (proposed nothing); `act` did not abort when a step failed, so a failed checksum would not have stopped the install (now every failed step ends the run); `systemd-analyze verify` rejects a temp file without a `.service` suffix, which would have broken the `units` step; the static safety scan initially matched nothing at line start or inside `act "…" cmd` calls (caught by a planted-violation meta-test, now fixed).
 
 Not verifiable here: Ubuntu 26.04; real systemd start/stop/restart/cgroup limits/`KillMode` (units are checked with `systemd-analyze verify` and unit-tested only; the rehearsal used `LLM_NO_SYSTEMD=1`, and its preflight "no systemd" blocker was overridden on purpose because the container has none); behaviour next to real Docker/Caddy/n8n/SUPPAR/EARNIX (docker and systemctl are shims in Part A); the Hostinger environment (CPU, RAM, disk, existing ports); Windows and Android for anything in `vps/`.
+
+## Free-only layer (added 2026-10-30)
+
+Environment: Ubuntu 24.04 container, Node 24.22.2 (from the npm registry), FreeLLMAPI v0.16.12 (`36826e7`) and `omniroute@3.8.52` installed with this toolkit's own installers and run side by side.
+
+| What | Command | Result |
+|---|---|---|
+| Guard + policy CLI against loopback mocks (policy, params, routes, rate limit, cooldown, daily cap, restart recovery, kill switch, audit/apply, secret canary) | `node --test tests/guard/*.test.mjs` | **22 passed, 0 failed** |
+| VPS unit rendering (dry-run default, 6 units, loopback, users, sandboxing, no secrets, port clash) | `bash tests/vps/free-install.test.sh` | **16 passed, 0 failed** |
+| ShellCheck over all shell scripts | as CI | clean |
+| `free-policy freellmapi apply` on a real fresh FreeLLMAPI | live | 97 enabled models -> **43**, 0 violations (54 non-free disabled, nothing enabled/deleted) |
+| **Real inference**: guard -> FreeLLMAPI -> OVH anonymous tier (`gpt-oss-20b`, `max_tokens=16`, 1 request, ₹0) | live, through the session proxy | genuine completion with token usage (not a mock) |
+| Live negatives through the same stack: `gpt-4o`, Cloudflare `kimi-k2.6`, OpenRouter `owl-alpha`, `models[]` fallback, `web_search` tool, `/v1/images`, `/api/keys` | live | all 403 from the guard; the OVH request counter stayed at 1 |
+| OmniRoute path: guard -> real OmniRoute with a real OmniRoute API key | live | allowed model refused by OmniRoute itself (`provider_not_configured`, no inference); `auto`/paid/combo blocked by the guard |
+
+**Not tested (blocked):** real inference through OmniRoute (its `ovhcloud` connector requires an API key, and OVH keys need a payment method; no keys for the other five providers were supplied),
+real inference for Groq/Gemini/Mistral/OpenRouter/Cloudflare through either gateway (no keys), and anything on the VPS (not accessed from this environment). `systemd-analyze verify` could only check unit syntax here (no deployed `/srv/llm`).

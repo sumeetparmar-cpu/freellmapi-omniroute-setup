@@ -1,0 +1,50 @@
+# free-guard: loopback policy proxy in front of one gateway. Rendered by vps/free-install.sh (@...@ are placeholders).
+# Clients (and Caddy, if you ever expose it) must target 127.0.0.1:@GPORT@, never the gateway port.
+[Unit]
+Description=free-guard (free-only policy) for @GW@ (127.0.0.1:@GPORT@ -> 127.0.0.1:@PORT@)
+After=llm-@GW@.service
+Wants=llm-@GW@.service
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=@USER@
+Group=@USER@
+WorkingDirectory=@LLM_ROOT@/@GW@
+Environment=HOME=@LLM_ROOT@/@GW@/home
+Environment=PATH=@LLM_ROOT@/runtime/node/bin:/usr/bin:/bin
+Environment=NODE_OPTIONS=--max-old-space-size=128
+# No secrets here or in the process environment: the guard only forwards the caller's Authorization header and never logs it.
+ExecStart=@LLM_ROOT@/runtime/node/bin/node @LLM_ROOT@/toolkit/tools/free-guard.mjs --gateway @GW@ --upstream http://127.0.0.1:@PORT@ --listen 127.0.0.1:@GPORT@ --state @LLM_ROOT@/@GW@/state/free-guard.json --log @LLM_ROOT@/@GW@/logs/free-guard.log --kill-file @LLM_ROOT@/@GW@/state/free-audit.flag@EXTRA@
+Restart=always
+RestartSec=3
+TimeoutStopSec=15
+UMask=0077
+MemoryMax=192M
+CPUQuota=30%
+Nice=10
+TasksMax=64
+LimitNOFILE=2048
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=@LLM_ROOT@/@GW@
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

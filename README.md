@@ -29,7 +29,7 @@ Node 22.22.0 and 24.11.0; OmniRoute needs 24.x or ≥ 22.22.2 (the audit script 
   `.gitignore` blocks env/db/key/archive files and `scripts/check-secrets.sh` scans before commit.
 * **API keys never touch a command line**: `test-model` takes the key from an env var, a key file, or a
   hidden prompt, and hands it to curl/HttpClient without putting it in `argv` or on disk.
-* **Free-first, but honest** about quotas, terms and privacy: [docs/PROVIDERS-AND-COSTS.md](docs/PROVIDERS-AND-COSTS.md).
+* **Free-only, enforced** (allowlist + guard proxy + audit; see [docs/FREE-ONLY.md](docs/FREE-ONLY.md)) and **honest** about quotas, terms and privacy: [docs/PROVIDERS-AND-COSTS.md](docs/PROVIDERS-AND-COSTS.md).
 * **Reversible.** Every `update` takes a backup and records the previous version;
   `rollback [--with-data]` returns to it. See [docs/ROLLBACK.md](docs/ROLLBACK.md).
 
@@ -38,12 +38,12 @@ Node 22.22.0 and 24.11.0; OmniRoute needs 24.x or ≥ 22.22.2 (the audit script 
 ```
 termux/   freellmapi.sh  omniroute.sh  audit-env.sh  lib/common.sh     # Android/Termux (bash)
 windows/  freellmapi.ps1 omniroute.ps1 audit-env.ps1 lib/Common.ps1    # Windows PowerShell 5.1 / 7+
-config/   gateways.env.example                                         # non-secret overrides (ports, pins)
-tools/    quota-report.mjs                                             # read-only usage/quota report (used by both platforms)
+config/   gateways.env.example  free-policy.json                       # non-secret overrides (ports, pins); verified-free model allowlist
+tools/    quota-report.mjs  free-guard.mjs  free-policy.mjs  lib/        # read-only quota report; free-only guard proxy + policy audit
 vps/      preflight.sh inventory.sh deploy.sh verify.sh gwctl.sh monitor.sh backup-run.sh systemd/   # Ubuntu VPS deployment (isolated users, systemd)
 scripts/  check-secrets.sh                                             # pre-commit secret scan
 tests/    termux/ windows/ mock-openai-server.mjs                      # offline test suites
-docs/     PROVIDERS-AND-COSTS.md  ROLLBACK.md  QUOTA-REPORT.md  VPS-DEPLOYMENT.md  TESTING.md
+docs/     FREE-ONLY.md  PROVIDERS-AND-COSTS.md  ROLLBACK.md  QUOTA-REPORT.md  VPS-DEPLOYMENT.md  TESTING.md
 ```
 
 State lives in `~/llm-gateways` (Termux) or `%USERPROFILE%\llm-gateways` (Windows); override with `GW_HOME`.

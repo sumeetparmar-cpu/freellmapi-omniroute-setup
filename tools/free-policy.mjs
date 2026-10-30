@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Free-only policy CLI.
 //   node tools/free-policy.mjs check <freellmapi|omniroute> <model-id>
-//   node tools/free-policy.mjs freellmapi audit|apply --base-url http://127.0.0.1:3001 [--flag-file F]   (env FREELLMAPI_ADMIN_TOKEN)
+//   node tools/free-policy.mjs freellmapi audit|apply --base-url http://127.0.0.1:3001 [--flag-file F]   (env FREELLMAPI_ADMIN_TOKEN | FREELLMAPI_ADMIN_EMAIL+PASSWORD)
 //     --flag-file F: created when an audit finds violations (free-guard --kill-file F then refuses inference), removed when clean.
 //     (v0.16.12 always groups same-named models behind one id; that is safe only because 'apply' leaves just free members enabled.)
 //   node tools/free-policy.mjs omniroute  audit       --base-url http://127.0.0.1:20128     (env OMNIROUTE_MGMT_TOKEN, read-only)
@@ -68,8 +68,15 @@ export async function main(argv, env = process.env, out = (s) => process.stdout.
   const flag = (code) => { if (flagFile) { if (code === 1) writeFileSync(flagFile, `audit failed ${new Date().toISOString()}\n`, { mode: 0o600 }); else if (code === 0) rmSync(flagFile, { force: true }); } return code; };
   try {
     if (cmd === 'freellmapi') {
-      const token = env.FREELLMAPI_ADMIN_TOKEN;
-      if (!token) { out('FREELLMAPI_ADMIN_TOKEN not set (dashboard session token); cannot audit'); return 2; }
+      let token = env.FREELLMAPI_ADMIN_TOKEN;
+      if (!token && env.FREELLMAPI_ADMIN_EMAIL && env.FREELLMAPI_ADMIN_PASSWORD) {
+        // Short-lived dashboard session obtained per run, so no long-lived token has to be stored.
+        const r = await fetch(new URL('/api/auth/login', base), { method: 'POST', redirect: 'error', signal: AbortSignal.timeout(20_000),
+          headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email: env.FREELLMAPI_ADMIN_EMAIL, password: env.FREELLMAPI_ADMIN_PASSWORD }) });
+        if (!r.ok) { out(`dashboard login failed (HTTP ${r.status})`); return 2; }
+        token = (await r.json()).token;
+      }
+      if (!token) { out('no FREELLMAPI_ADMIN_TOKEN or FREELLMAPI_ADMIN_EMAIL+FREELLMAPI_ADMIN_PASSWORD set; cannot audit'); return 2; }
       const getKeys = async () => { const k = await api(base, token, 'GET', '/api/keys'); return Array.isArray(k) ? k : k.keys ?? []; };
       let models = await api(base, token, 'GET', '/api/models');
       let bad = auditFreellmapiModels(policy, models, await getKeys());

@@ -207,3 +207,26 @@ test('catalog-audited FreeLLMAPI: grouped ids are accepted only if the gateway s
     assert.equal((await post('auto')).status, 200);
   } finally { g.server.close(); up.close(); up.closeAllConnections?.(); g.server.closeAllConnections?.(); }
 });
+
+test('restart recovery: daily counters and cooldowns survive a guard restart (state file), a corrupt state file is ignored', async () => {
+  const { mkdtempSync, writeFileSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os'); const { join } = await import('node:path');
+  const stateFile = join(mkdtempSync(join(tmpdir(), 'fg-')), 'state.json');
+  const p2 = structuredClone(policy); p2.providers.groq.limits = { rpm: 1000, rpd: 2 };
+  const up = http.createServer((q, s) => { q.resume(); q.on('end', () => { s.writeHead(200); s.end('{}'); }); });
+  const upPort = await listen(up); const clock = Date.UTC(2026, 9, 30, 10, 0, 0);
+  const boot = async () => { const g = createGuard({ gateway: 'omniroute', upstream: `http://127.0.0.1:${upPort}`, policy: p2, now: () => clock, quiet: true, stateFile }); return { g, port: await listen(g.server) }; };
+  const post = (port) => new Promise((res) => { const r = http.request({ host: '127.0.0.1', port, path: '/v1/chat/completions', method: 'POST' }, (x) => { x.resume(); x.on('end', () => res(x.statusCode)); }); r.end(JSON.stringify(chat('groq/openai/gpt-oss-20b'))); });
+  try {
+    let { g, port } = await boot();
+    assert.deepEqual([await post(port), await post(port)], [200, 200]);
+    await new Promise((r) => g.server.close(r)); // 'close' persists state
+    ({ g, port } = await boot());
+    assert.equal(await post(port), 429, 'the two requests made before the restart still count');
+    await new Promise((r) => g.server.close(r));
+    writeFileSync(stateFile, '{not json');
+    ({ g, port } = await boot());
+    assert.equal(await post(port), 200, 'corrupt state falls back to a clean slate instead of crashing');
+    await new Promise((r) => g.server.close(r));
+  } finally { up.close(); up.closeAllConnections?.(); }
+});
