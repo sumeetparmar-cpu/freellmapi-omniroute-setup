@@ -31,7 +31,9 @@ async function rig(gateway = 'omniroute', opts = {}, upstreamImpl) {
   const port = await listen(g.server);
   const call = (method, path, body, headers = {}) => new Promise((resolve, reject) => {
     const data = body === undefined ? undefined : typeof body === 'string' ? body : JSON.stringify(body);
-    const r = http.request({ host: '127.0.0.1', port, path, method, headers: { 'content-type': 'application/json', ...headers } }, (res) => {
+    // Explicit framing: Node's client sends GET/DELETE bodies with NO Content-Length/chunking, which desyncs a keep-alive connection (client bug, not the guard's).
+    const framing = data === undefined ? {} : { 'content-length': Buffer.byteLength(data) };
+    const r = http.request({ host: '127.0.0.1', port, path, method, headers: { 'content-type': 'application/json', ...framing, ...headers } }, (res) => {
       let t = ''; res.on('data', (c) => (t += c)); res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, text: t, json: (() => { try { return JSON.parse(t); } catch { return null; } })() }));
     });
     r.on('error', reject); if (data) r.write(data); r.end();
@@ -258,5 +260,58 @@ test('the guard log is size-capped (one rotated generation) and never contains c
     assert.ok(existsSync(`${logFile}.1`), 'rotated');
     assert.ok(statSync(logFile).size <= 2000 && statSync(`${logFile}.1`).size <= 2000);
     assert.ok(!readFileSync(logFile, 'utf8').includes(CLIENTTOK) && !readFileSync(`${logFile}.1`, 'utf8').includes(CLIENTTOK));
+  } finally { await r.close(); }
+});
+
+test('REGRESSION: JSON bodies that are not objects (null, [], 5, "x", true) are 400s and cannot crash the guard', async () => {
+  const r = await rig();
+  try {
+    for (const b of ['null', '[]', '5', '"x"', 'true', '[{"model":"' + GOOD + '"}]']) assert.equal((await r.call('POST', '/v1/chat/completions', b)).status, 400, b);
+    assert.equal((await r.call('POST', '/v1/chat/completions', chat(GOOD))).status, 200, 'still serving');
+    assert.equal(r.seen.length, 1);
+  } finally { await r.close(); }
+});
+
+test('a hand-edited / garbage state file cannot break serving', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'fgx-'));
+  for (const junk of ['{"counts":"x","cooldowns":[],"windows":5,"day":7,"passed":"a"}', '{"counts":{"groq":"many"},"cooldowns":{"groq:x":{"until":"never"}},"windows":{"k":"nope"}}', 'null', '[]', '']) {
+    const stateFile = join(dir, 's.json'); writeFileSync(stateFile, junk);
+    const r = await rig('omniroute', { stateFile });
+    try { assert.equal((await r.call('POST', '/v1/chat/completions', chat(GOOD))).status, 200, junk); assert.equal((await r.call('GET', '/__guard/status')).status, 200); } finally { await r.close(); }
+  }
+});
+
+test('FUZZ: 400 random hostile requests => guard stays up, every response is sane, and nothing non-compliant reaches the gateway', async () => {
+  const { classify } = await import('../../tools/lib/free-policy.mjs');
+  let seed = 0x5eed1234; const rnd = () => ((seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0) / 2 ** 32);
+  const pick = (a) => a[Math.floor(rnd() * a.length)];
+  const models = [GOOD, 'ovhanon/gpt-oss-20b', 'ovh/gpt-oss-120b', 'mistral/mistral-small-latest', 'openai/gpt-4o', 'auto', '', 'groq/llama-3.3-70b-versatile', 'cf/@cf/zai-org/glm-5.3', 'openrouter/x:free', 'openrouter/x:free:online', ' ' + GOOD, GOOD + '\n', 7, null, ['a'], {}, true];
+  const scalar = () => pick([null, true, false, 0, 1, -1, 1e308, '', 'x'.repeat(1 + Math.floor(rnd() * 50)), '\u0000', '😀', [], {}]);
+  const value = (d = 0) => (d > 3 || rnd() < 0.4 ? scalar() : rnd() < 0.5 ? Array.from({ length: Math.floor(rnd() * 4) }, () => value(d + 1)) : Object.fromEntries(Array.from({ length: Math.floor(rnd() * 4) }, () => [pick(['model', 'messages', 'n', 'tools', 'models', 'stream', 'x', '__proto__', 'constructor']), value(d + 1)])));
+  const paths = ['/v1/chat/completions', '/v1/chat/completions', '/v1/chat/completions', '/v1/embeddings', '/v1/models', '/v1/images/generations', '//v1/chat/completions', '/v1/chat/completions/', '/%2e%2e/v1/chat/completions', '/api/keys', '/__guard/status', '/', '/v1/chat/completions?model=gpt-4o', '/v1/chat/completions#x'];
+  const cts = ['application/json', 'application/json', 'application/json; charset=utf-8', 'text/plain', '', 'application/x-www-form-urlencoded', 'APPLICATION/JSON'];
+  const r = await rig('omniroute', { noRateLimit: true, maxInflight: 64 });
+  const bad = [];
+  try {
+    for (let i = 0; i < 400; i++) {
+      const body = rnd() < 0.55 ? chat(pick(models), rnd() < 0.5 ? Object.fromEntries([[pick(['n', 'tools', 'models', 'stream', 'extra_body', 'x']), value()]]) : {})
+        : rnd() < 0.8 ? value() : pick(['', '{', '{"model":', 'null', '\u0000\u0001', 'x'.repeat(3000)]);
+      const raw = typeof body === 'string' ? body : JSON.stringify(body);
+      const x = await r.call(pick(['POST', 'POST', 'POST', 'GET', 'PUT', 'DELETE', 'PATCH']), pick(paths), raw, { 'content-type': pick(cts), ...(rnd() < 0.2 ? { 'x-omniroute-connection': 'c', cookie: 'a=b' } : {}) }).catch((e) => ({ status: `ERR ${e.code}` }));
+      if (typeof x.status !== 'number' || x.status < 200 || x.status > 599) bad.push([i, x.status, raw.slice(0, 80)]);
+    }
+    assert.deepEqual(bad, [], 'every response must be a real HTTP status (no resets/crashes)');
+    assert.equal((await r.call('GET', '/__guard/status')).status, 200, 'guard still alive');
+    // THE invariant: whatever reached the gateway is policy-compliant and came through an allowed route
+    for (const s of r.seen) {
+      assert.ok((s.method === 'GET' && s.url === '/v1/models') || (s.method === 'POST' && ['/v1/chat/completions', '/v1/embeddings'].includes(s.url)), `route reached gateway: ${s.method} ${s.url}`);
+      if (s.method === 'POST') {
+        const b = JSON.parse(s.body); assert.equal(classify(policy, 'omniroute', b.model).ok, true, `non-compliant model reached the gateway: ${JSON.stringify(b.model)}`);
+        for (const f of policy.forbiddenBodyFields) assert.ok(!(f in b), `forbidden field ${f} reached the gateway`);
+        assert.ok(b.n === undefined || b.n === 1);
+      }
+      assert.ok(!Object.keys(s.headers).some((h) => /^x-(omniroute|freellm)/.test(h)) && !('cookie' in s.headers), 'routing/cookie header reached the gateway');
+    }
+    assert.ok(r.seen.length >= 5, 'generator sanity: the fuzz must also let some legitimate traffic through (' + r.seen.length + ')');
   } finally { await r.close(); }
 });

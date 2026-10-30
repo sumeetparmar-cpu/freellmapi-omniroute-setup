@@ -50,3 +50,7 @@ Resume rule: read the last "NEXT" line, continue from there. Facts here are date
 * DONE  Monitoring: tools/free-status.mjs + monitor.sh guard/audit/kill-switch/quota checks (tests/vps/monitor-guard.test.sh, 9/9).
 * DONE  Backup/recovery: FOUND that backups omitted the guard's client-key hashes (restore would lock clients out). Now included (hashes only; upstream key + audit credentials deliberately excluded). tests/vps/guard-backup.test.sh 16/16.
 * DONE  CI: new `systemd-guard` job (real systemd) and ubuntu-24.04 + ubuntu-26.04 matrix for linux / vps-privileged / vps-e2e. ubuntu-26.04 is a GitHub-hosted runner (verified in actions/runner-images README).
+* FIXED (CRITICAL) Full-file code review found that a 4-byte POST body `null` (valid JSON) crashed the guard (TypeError in an async handler => unhandled rejection => process exit). Under systemd, a few such requests would exceed StartLimitBurst and leave the unit
+        permanently failed. Fix: bodies must be JSON objects (400 otherwise); catch-all around the request handler (500, never a crash); state-file shape validation; last-resort process handlers.
+        Added: regression test, garbage-state-file test, and a deterministic 400-request FUZZ test whose invariant is "everything that reaches the gateway is policy-compliant" (mutation-checked: disabling the model check makes it fail).
+* NOTE  Fuzz first reported ECONNRESETs: traced to Node's HTTP *client* sending GET/DELETE bodies without framing (desyncing keep-alive), not the guard; test client now sends Content-Length.

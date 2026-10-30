@@ -58,7 +58,15 @@ export function createGuard(opts) {
   const now = opts.now ?? (() => Date.now());
   const maxBody = Number(opts.maxBodyKb ?? 1024) * 1024;
   const state = { day: utcDay(now()), counts: {}, cooldowns: {}, blocked: 0, passed: 0, ...(readState(opts.stateFile) ?? {}) };
-  state.windows ??= {};      // key -> timestamps (ms); persisted so a restart cannot be used to reset the rate limit
+  // The state file is ours, but never trust its shape: a hand-edited or half-written file must not break serving.
+  const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
+  if (typeof state.day !== 'string') state.day = utcDay(now());
+  for (const k of ['counts', 'cooldowns', 'windows']) if (!isObj(state[k])) state[k] = {};
+  for (const k of ['blocked', 'passed']) if (!Number.isFinite(state[k])) state[k] = 0;
+  for (const [k, v] of Object.entries(state.counts)) if (!Number.isFinite(v) || v < 0) delete state.counts[k];
+  for (const [k, v] of Object.entries(state.cooldowns)) if (!isObj(v) || !Number.isFinite(v.until) || !Number.isFinite(v.strikes)) delete state.cooldowns[k];
+  for (const [k, v] of Object.entries(state.windows)) if (!Array.isArray(v) || !v.every(Number.isFinite)) delete state.windows[k];
+  // key -> timestamps (ms); persisted so a restart cannot be used to reset the rate limit
   const windows = new Map(Object.entries(state.windows));
   let dirty = false;
   let inflight = 0;
@@ -180,6 +188,14 @@ export function createGuard(opts) {
     });
     req.on('end', async () => {
       if (aborted) return;
+      try { await handle(); } catch (e) {
+        // Never let a bug turn into a crash (a crash-loop would trip StartLimitBurst and take the whole free-only layer down).
+        log({ ev: 'internal_error', error: String(e?.message ?? e).slice(0, 200) });
+        if (!res.headersSent) deny(res, 500, 'internal_error', 'free-guard internal error (request refused)');
+        else res.destroy();
+      }
+    });
+    async function handle() {
       const raw = Buffer.concat(chunks);
       let meta = { provider: undefined, model: undefined };
       if (req.method === 'POST') {
@@ -188,6 +204,8 @@ export function createGuard(opts) {
         }
         let body;
         try { body = raw.length ? JSON.parse(raw.toString('utf8')) : {}; } catch { return deny(res, 400, 'bad_json', 'body must be JSON'); }
+        // `null`, arrays and scalars are valid JSON but not valid requests: reject before anything dereferences them.
+        if (body === null || typeof body !== 'object' || Array.isArray(body)) return deny(res, 400, 'bad_body', 'body must be a JSON object');
         const bad = inspectBody(policy, body);
         if (bad) return deny(res, 403, 'param_blocked', bad);
         if (opts.killFile && existsSync(opts.killFile)) return deny(res, 503, 'kill_switch', 'free-only audit failed; inference is suspended until `free-policy audit` passes');
@@ -203,7 +221,7 @@ export function createGuard(opts) {
         meta = v;
       }
       forward(req, res, url, raw, meta);
-    });
+    }
   });
 
   function forward(req, res, url, raw, meta) {
@@ -276,6 +294,8 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       catalogAudited: !!a['catalog-audited'], killFile: a['kill-file'], noRateLimit: !!a['no-rate-limit'], maxBodyKb: a['max-body-kb'],
       clientKeysFile: a['client-keys-file'], upstreamKeyFile: a['upstream-key-file'], allowedHosts: a['allow-host'] ?? [] });
     g.server.listen(Number(port), host, () => process.stderr.write(`free-guard ${a.gateway} ${host}:${port} -> ${a.upstream}\n`));
+    process.on('unhandledRejection', (e) => process.stderr.write(`free-guard: unhandled rejection (ignored, request path is guarded): ${String(e?.message ?? e).slice(0, 200)}\n`));
+    process.on('uncaughtException', (e) => { process.stderr.write(`free-guard: fatal: ${String(e?.stack ?? e).slice(0, 400)}\n`); process.exit(1); });
     for (const s of ['SIGINT', 'SIGTERM']) process.once(s, () => g.shutdown(Number(process.env.GUARD_DRAIN_MS ?? 5000)).then(() => process.exit(0)));
   } catch (e) { process.stderr.write(`free-guard: ${e.message}\n`); process.exit(2); }
 }
