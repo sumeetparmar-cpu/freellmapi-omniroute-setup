@@ -144,7 +144,11 @@ for _ in 1 2 3 4 5 6 7 8; do
   for _ in $(seq 1 20); do [ "$(prop freellmapi MainPID)" != "$p" ] && break; sleep 0.5; done
 done
 for _ in $(seq 1 30); do [ "$(prop freellmapi ActiveState)" = failed ] && break; sleep 1; done
-ck "freellmapi: after repeated crashes the unit is FAILED with start-limit-hit ($n kills)" bash -c "[ \"\$(systemctl show llm-freellmapi.service -p ActiveState --value)\" = failed ] && [ \"\$(systemctl show llm-freellmapi.service -p Result --value)\" = start-limit-hit ]"
+info "freellmapi after the loop: ActiveState=$(prop freellmapi ActiveState) Result=$(prop freellmapi Result) NRestarts=$(prop freellmapi NRestarts)"
+ck "freellmapi: after repeated crashes the unit is FAILED ($n kills)" bash -c "[ \"\$(systemctl show llm-freellmapi.service -p ActiveState --value)\" = failed ]"
+ck "freellmapi: systemd logged the start-limit refusal (StartLimitBurst reached)" bash -c "journalctl -u llm-freellmapi.service --no-pager | grep -q 'Start request repeated too quickly'"
+r0="$(prop freellmapi NRestarts)"; sleep 12
+ck "freellmapi: NOT respawned any more (no new process, NRestarts unchanged over 12 s)" bash -c "[ \"\$(systemctl show llm-freellmapi.service -p MainPID --value)\" = 0 ] && [ \"\$(systemctl show llm-freellmapi.service -p NRestarts --value)\" = '$r0' ]"
 ck "omniroute unaffected by freellmapi's crash loop" health omniroute
 ck "documented recovery (reset-failed + start) works" bash -c "systemctl reset-failed llm-freellmapi.service && systemctl start llm-freellmapi.service"
 ck "freellmapi healthy after the documented recovery" wait_health freellmapi 90
