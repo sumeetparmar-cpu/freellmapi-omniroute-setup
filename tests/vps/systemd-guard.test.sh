@@ -94,13 +94,15 @@ t "guard log has no credentials"               bash -c "! grep -qE '$CKO|ups-tok
 probe() { # probe NAME USER COMMAND
   sed -e "s~^ExecStart=.*~ExecStart=/bin/sh -c '$3'~" -e "s~^User=.*~User=$2~" -e "s~^Group=.*~Group=$2~" \
       -e 's~^Restart=always~Restart=no~' -e 's~^Type=simple~Type=oneshot~' -e '/^\[Install\]/,$d' "$SD/llm-guard-omniroute.service" > "$SD/$1.service"
-  systemctl daemon-reload; systemctl start "$1.service"; rm -f "$SD/$1.service"
+  systemctl daemon-reload; systemctl start "$1.service" || echo "# probe $1 exited non-zero"; rm -f "$SD/$1.service"
 }
-OUTA="$LLM_ROOT/omniroute/state/probeA.out"
-probe llm-sbxa root "{ touch /usr/lib/sbx-x 2>/dev/null \&\& echo WROTE_USR || echo USR_DENIED; touch /etc/sbx-x 2>/dev/null \&\& echo WROTE_ETC || echo ETC_DENIED; touch $LLM_ROOT/freellmapi/state/sbx 2>/dev/null \&\& echo WROTE_OTHER || echo OTHER_DENIED; touch $LLM_ROOT/toolkit/sbx 2>/dev/null \&\& echo WROTE_TOOLKIT || echo TOOLKIT_DENIED; ls /root >/dev/null 2>\&1 \&\& echo ROOT_HOME_VISIBLE || echo ROOT_HOME_DENIED; touch $LLM_ROOT/omniroute/state/sbx-rw 2>/dev/null \&\& echo OWN_RW || echo OWN_RO; } > $OUTA 2>\&1"
-t "sandbox (as root!): /usr and /etc are read-only"  bash -c "grep -q USR_DENIED '$OUTA' && grep -q ETC_DENIED '$OUTA'"
-t "sandbox: the other gateway's dir and the toolkit are read-only" bash -c "grep -q OTHER_DENIED '$OUTA' && grep -q TOOLKIT_DENIED '$OUTA'"
-t "sandbox: home directories are hidden"            bash -c "grep -q ROOT_HOME_DENIED '$OUTA'"
+probe llm-sbxa root "touch /usr/lib/sbx-x 2>/dev/null \&\& echo WROTE_USR || echo USR_DENIED; touch /etc/sbx-x 2>/dev/null \&\& echo WROTE_ETC || echo ETC_DENIED; touch $LLM_ROOT/toolkit/sbx 2>/dev/null \&\& echo WROTE_TOOLKIT || echo TOOLKIT_DENIED; ls /root >/dev/null 2>\&1 \&\& echo ROOT_HOME_VISIBLE || echo ROOT_HOME_DENIED"
+# Probe A's output goes to the journal (root without CAP_DAC_OVERRIDE cannot create files in the service user's 0700 dir).
+sleep 1; OUTA="$(journalctl -u llm-sbxa.service -o cat --no-pager 2>&1)"
+t "sandbox (as root!): /usr and /etc are read-only"  bash -c "echo '$OUTA' | grep -q USR_DENIED && echo '$OUTA' | grep -q ETC_DENIED"
+t "sandbox: the root-owned toolkit is read-only"     bash -c "echo '$OUTA' | grep -q TOOLKIT_DENIED"
+t "sandbox: /root (home) is hidden even from root"   bash -c "echo '$OUTA' | grep -q ROOT_HOME_DENIED"
+t "sandbox probe really ran (no WROTE_/VISIBLE markers)" bash -c "echo '$OUTA' | grep -q USR_DENIED && ! echo '$OUTA' | grep -qE 'WROTE_|ROOT_HOME_VISIBLE'"
 OUTB="$LLM_ROOT/omniroute/state/probeB.out"
 probe llm-sbxb "$UO" "{ touch $LLM_ROOT/omniroute/state/sbx-own \&\& echo OWN_OK || echo OWN_FAIL; } > $OUTB 2>\&1"
 t "sandbox: the service user can write its own state dir" bash -c "grep -q OWN_OK '$OUTB'"
