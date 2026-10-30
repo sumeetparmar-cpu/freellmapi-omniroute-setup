@@ -12,6 +12,7 @@
     "ovh": ["https://docs.ovhcloud.com/en/guides/public-cloud/ai-machine-learning/ai-endpoints-getting-started"]
   },
   "customEndpoints": { "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1": "ovh" },
+  "customNodePrefixes": { "ovhanon": "ovh" },
   "gatewayLimits": { "freellmapi": { "rpm": 120, "rpd": 20000 } },
   "allowedRoutes": [
     "GET /v1/models",

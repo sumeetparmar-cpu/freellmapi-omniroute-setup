@@ -107,3 +107,21 @@ test('check command', async () => {
   assert.equal(await main(['check', 'omniroute', 'openai/gpt-4o'], {}, (s) => out.push(s)), 1);
   assert.match(out[0], /^ALLOW/); assert.match(out[1], /^BLOCK/);
 });
+
+test('OmniRoute custom nodes: only the listed prefix pointing at the listed free endpoint passes; anything else is a violation', () => {
+  const ok = { id: 'openai-compatible-chat-1', prefix: 'ovhanon', baseUrl: `${OVH}/` };
+  assert.deepEqual(auditOmnirouteProviders(policy, { connections: [{ provider: ok.id, isActive: true }] }, { nodes: [ok] }), []);
+  const wrongUrl = { ...ok, baseUrl: 'https://api.example.com/v1' };
+  assert.equal(auditOmnirouteProviders(policy, { connections: [{ provider: ok.id }] }, { nodes: [wrongUrl] }).length, 1);
+  const wrongPrefix = { ...ok, prefix: 'paid' };
+  assert.equal(auditOmnirouteProviders(policy, { connections: [] }, { nodes: [wrongPrefix] }).length, 1);
+  assert.equal(auditOmnirouteProviders(policy, { connections: [{ provider: 'openai-compatible-chat-zzz' }] }, { nodes: [] }).length, 1);
+});
+
+test('classify: OmniRoute ovhanon/<model> follows the OVH allowlist; unknown custom prefixes are blocked', async () => {
+  const { classify } = await import('../../tools/lib/free-policy.mjs');
+  assert.equal(classify(policy, 'omniroute', 'ovhanon/gpt-oss-20b').ok, true);
+  assert.equal(classify(policy, 'omniroute', 'ovhanon/gpt-4o').ok, false);
+  assert.equal(classify(policy, 'omniroute', 'ovhanon/Qwen3Guard-Gen-0.6B').ok, false);
+  assert.equal(classify(policy, 'omniroute', 'mynode/gpt-oss-20b').ok, false);
+});

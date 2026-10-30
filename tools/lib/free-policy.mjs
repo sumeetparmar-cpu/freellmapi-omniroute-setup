@@ -47,6 +47,13 @@ export function classify(policy, gateway, rawModel, opts = {}) {
     const i = model.indexOf('/');
     if (i < 1) return { ok: false, reason: 'OmniRoute models must be explicit provider/model (combos and aliases are blocked)' };
     const prefix = model.slice(0, i), rest = model.slice(i + 1);
+    // OmniRoute custom OpenAI-compatible nodes: the prefix is chosen by the operator; only prefixes the policy knows are allowed
+    // (and `free-policy omniroute audit` checks that the node behind the prefix really points at the listed free endpoint).
+    const viaNode = policy.customNodePrefixes?.[prefix];
+    if (viaNode) {
+      const r = providerAllows(policy.providers[viaNode], rest);
+      return r.ok ? { ok: true, provider: viaNode, model: rest } : { ok: false, provider: viaNode, model: rest, reason: `${viaNode}: ${r.why}` };
+    }
     for (const [name, rule] of Object.entries(policy.providers)) {
       if (rule.ids.includes(prefix)) {
         const r = providerAllows(rule, rest);

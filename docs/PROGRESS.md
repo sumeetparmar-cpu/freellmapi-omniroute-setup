@@ -33,3 +33,5 @@ Resume rule: read the last "NEXT" line, continue from there. Facts here are date
         tests/guard/security.test.mjs: 12 adversarial tests (40 bad model strings, 28 route tricks, smuggling, streaming, crash/restart quota) all pass.
 * DONE  Live: gateway key useless through the guard, guard key useless against either gateway directly; both gateways + guards listen on 127.0.0.1 only; no TLS-verification bypass anywhere in the repo.
 * CORRECTION  My earlier "no gateway/guard ports left listening" check used `ss`, which is not installed here, so it proved nothing; the scratch gateways were still running. Verified now via /proc/net/tcp.
+* DONE  OMNIROUTE: genuine keyless ₹0 route found and verified live: custom OpenAI-compatible node (prefix `ovhanon`) -> OVH anonymous endpoint, connection with no API key. Real completion via client -> guard -> OmniRoute -> OVH.
+        Policy `customNodePrefixes` + audit of provider nodes (wrong prefix/base URL/compatible connection without node => violation + kill flag); audit login via OMNIROUTE_ADMIN_PASSWORD. Built-in ovhcloud connector needs a key => not used.

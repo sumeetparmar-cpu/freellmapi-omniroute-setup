@@ -49,6 +49,38 @@ OMNIROUTE_MGMT_TOKEN=... node tools/free-policy.mjs omniroute audit --base-url h
   The kill switch covers drift between audits: `audit --flag-file F` creates `F` on violations, and `free-guard --kill-file F` then answers every inference request with 503 until a later audit removes it.
 * A model that FreeLLMAPI/OmniRoute would add later (catalog sync, new provider) is therefore refused by the guard (OmniRoute) or pruned/flagged by the audit (FreeLLMAPI).
 
+## OmniRoute: the keyless ₹0 route (verified live 2026-10-30)
+
+OmniRoute's built-in `ovhcloud` connector insists on an API key (and OVH keys need a payment method), so do **not** use it. Instead add a *custom OpenAI-compatible node* that points at OVH's anonymous endpoint.
+No credential is invented or sent: OmniRoute accepts a connection with no key, you activate it, and requests reach OVH unauthenticated (OVH's anonymous tier, 2 req/min per IP per model).
+
+1. Dashboard → Providers → *Add OpenAI-compatible node*: name `OVH anonymous`, **prefix `ovhanon`** (the policy only knows this prefix), type `chat`, base URL `https://oai.endpoints.kepler.ai.cloud.ovh.net/v1`.
+2. Add a connection for that node **without an API key** and make it active.
+3. Call it as `ovhanon/gpt-oss-20b` (or `ovhanon/gpt-oss-120b`, `ovhanon/Qwen3.6-27B`, `ovhanon/Mistral-Small-3.2-24B-Instruct-2506`, …).
+
+Result on the real stack: client → free-guard → OmniRoute 3.8.52 → OVH returned `pong` with real token usage. `free-policy omniroute audit` accepts exactly this node and flags any other custom node
+(wrong prefix, wrong base URL, or a compatible connection without a node) and engages the kill switch via `--flag-file`.
+
+Limits of this route: it is *one* provider, rate-limited to 2 requests/minute/model by OVH (the guard enforces the same locally), and OVH reserves the right to add caps or retire models. Other keyless providers
+bundled in OmniRoute (`duckduckgo-web`, `cloudflare-playground`, `veoaifree-web`, `uncloseai`, `aihorde`, …) are web/browser bridges or unverified community services; they are not in the policy and are blocked.
+
+## Client keys: make "go through the guard" the only way in
+
+Without client keys, anyone who holds the gateway's own API key can call the gateway directly and skip the guard. With client keys the gateway key stays in a root-only file the clients never see:
+
+```bash
+node tools/free-guard.mjs --new-client-key laptop --client-keys-file state/clients   # prints the key ONCE; only its SHA-256 is stored
+printf '%s\n' "$GATEWAY_API_KEY" > state/upstream.key && chmod 600 state/upstream.key      # key from the gateway dashboard
+node tools/free-guard.mjs --gateway omniroute --upstream http://127.0.0.1:20128 --listen 127.0.0.1:20228 \
+     --client-keys-file state/clients --upstream-key-file state/upstream.key
+```
+
+Verified live: the gateway key does not work through the guard, and a guard key does not work against either gateway directly (both answer 401).
+
+Other guard hardening (all covered by `tests/guard/security.test.mjs`): only `application/json` POSTs; the query string is dropped; only a header allowlist is forwarded (no `x-omniroute-*`, `x-freellm-*`, cookies, sessions or forwarding headers);
+`Host` must be loopback or `--allow-host`; `/__guard/status` is refused when reached through a reverse proxy; model strings must be plain printable ASCII; `n>1`, `best_of`, `extra_body`, non-`function` tools, `fusion` are blocked;
+at most 16 requests in flight; counters, cooldowns and per-minute windows are written through to the state file on every counted request, so a crash or restart cannot hand quota back.
+
 ## VPS (prepared, not applied)
 
 `vps/free-install.sh` follows the same dry-run-by-default rules as `vps/deploy.sh` and only adds six unit files; it never touches the gateway units, Docker, Caddy, n8n, SUPPAR, EARNIX or any database.

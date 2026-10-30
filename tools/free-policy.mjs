@@ -4,7 +4,7 @@
 //   node tools/free-policy.mjs freellmapi audit|apply --base-url http://127.0.0.1:3001 [--flag-file F]   (env FREELLMAPI_ADMIN_TOKEN | FREELLMAPI_ADMIN_EMAIL+PASSWORD)
 //     --flag-file F: created when an audit finds violations (free-guard --kill-file F then refuses inference), removed when clean.
 //     (v0.16.12 always groups same-named models behind one id; that is safe only because 'apply' leaves just free members enabled.)
-//   node tools/free-policy.mjs omniroute  audit       --base-url http://127.0.0.1:20128     (env OMNIROUTE_MGMT_TOKEN, read-only)
+//   node tools/free-policy.mjs omniroute  audit       --base-url http://127.0.0.1:20128 [--flag-file F]   (env OMNIROUTE_MGMT_TOKEN | OMNIROUTE_ADMIN_PASSWORD; read-only)
 // 'apply' (FreeLLMAPI only) disables every catalog model that is not verified free and every key on a platform the
 // policy does not cover. It never deletes anything, never enables anything and never prints a credential.
 // Exit codes: 0 compliant, 1 violations remain, 2 usage/connection error.
@@ -30,12 +30,23 @@ export function auditFreellmapiModels(policy, models, keys = []) {
   return violations;
 }
 
-export function auditOmnirouteProviders(policy, payload) {
+const trimSlash = (u) => String(u ?? '').replace(/\/+$/, '');
+
+export function auditOmnirouteProviders(policy, payload, nodesPayload = []) {
   const list = Array.isArray(payload) ? payload : payload?.connections ?? payload?.providers ?? payload?.data ?? [];
+  const nodes = Array.isArray(nodesPayload) ? nodesPayload : nodesPayload?.nodes ?? [];
   const bad = [];
+  const nodeOk = (n) => {
+    const prov = policy.customNodePrefixes?.[n.prefix];
+    return !!prov && policy.customEndpoints?.[trimSlash(n.baseUrl)] === prov;
+  };
+  const nodeById = new Map(nodes.map((n) => [n.id, n]));
+  for (const n of nodes) if (!nodeOk(n)) bad.push({ provider: `custom node '${n.prefix}'`, reason: 'prefix/base URL is not a listed free endpoint (see customNodePrefixes + customEndpoints)' });
   for (const p of list) {
     const id = p?.provider ?? p?.id ?? p?.name;
     if (!id || p.isActive === false || p.enabled === false) continue;
+    if (nodeById.has(id)) continue; // judged above via its node
+    if (/^openai-compatible-|^anthropic-compatible-/.test(String(id))) { bad.push({ provider: String(id), reason: 'compatible connection without a known node' }); continue; }
     if (!Object.values(policy.providers).some((r) => r.ids.includes(String(id)))) bad.push({ provider: String(id), reason: 'not in the verified-free policy' });
   }
   return bad;
@@ -97,8 +108,22 @@ export async function main(argv, env = process.env, out = (s) => process.stdout.
     }
     if (a === 'apply') { out('omniroute: apply is not supported (read-only audit; remove providers in the dashboard). Enforcement is by free-guard.'); return 2; }
     const token = env.OMNIROUTE_MGMT_TOKEN;
-    if (!token) { out('OMNIROUTE_MGMT_TOKEN not set; cannot audit connected providers'); return 2; }
-    const bad = auditOmnirouteProviders(policy, await api(base, token, 'GET', '/api/providers'));
+    let headersFn = null;
+    if (!token && env.OMNIROUTE_ADMIN_PASSWORD) {
+      const r = await fetch(new URL('/api/auth/login', base), { method: 'POST', redirect: 'error', signal: AbortSignal.timeout(20_000),
+        headers: { 'content-type': 'application/json' }, body: JSON.stringify({ password: env.OMNIROUTE_ADMIN_PASSWORD }) });
+      if (!r.ok) { out(`dashboard login failed (HTTP ${r.status})`); return 2; }
+      const cookie = (r.headers.getSetCookie?.() ?? []).map((c) => c.split(';')[0]).join('; ');
+      headersFn = { cookie };
+    }
+    if (!token && !headersFn) { out('no OMNIROUTE_MGMT_TOKEN (or OMNIROUTE_ADMIN_PASSWORD) set; cannot audit connected providers'); return 2; }
+    const get = async (p) => {
+      const r = await fetch(new URL(p, base), { redirect: 'error', signal: AbortSignal.timeout(20_000), headers: { accept: 'application/json', ...(token ? { authorization: `Bearer ${token}` } : headersFn) } });
+      if (r.status === 404) return null;
+      if (!r.ok) throw new Error(`GET ${p} -> HTTP ${r.status}`);
+      return r.json();
+    };
+    const bad = auditOmnirouteProviders(policy, await get('/api/providers') ?? [], await get('/api/provider-nodes') ?? []);
     out(`omniroute: ${bad.length} connected provider(s) outside the policy`);
     for (const v of bad) out(`  VIOLATION ${v.provider}: ${v.reason}`);
     return flag(bad.length ? 1 : 0);
