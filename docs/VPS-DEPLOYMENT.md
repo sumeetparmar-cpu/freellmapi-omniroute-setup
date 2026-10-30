@@ -47,6 +47,7 @@ mkdir -p /root/llm-deploy && tar -xzf /root/llm-toolkit.tar.gz -C /root/llm-depl
 ```
 Writes: only `/root/llm-deploy/*` (the extracted toolkit and two report files, mode 0600). Everything else is read-only (`ss`/`/proc/net/tcp`, `df`, `docker ps/volume ls/network ls`,
 `systemctl list-*`, `getent`, `stat`, `sha256sum`). The snapshot stores names, IDs, mounts, hashes and file identity only: never file contents, environment variables or secrets.
+The preflight also checks (all read-only, every one covered by `tests/vps/preflight-extra.test.sh` with a negative control): the **guard ports** (3101/20228) and ports inside the kernel's **ephemeral range**; a **cgroup/container memory cap** below what `/proc/meminfo` shows, `vm.overcommit_memory=2`, and how much RAM would **remain for your existing services** with both gateways running; **read-only or `noexec` mounts** under `/srv/llm` (BLOCK) or `/tmp` (WARN) and free space in `/tmp`; a **symlinked** `/srv/llm`, a permissive `umask`, write access to `/srv` and `/etc/systemd/system`; **foreign unit files that already use our `llm-*` names** (BLOCK: they would be overwritten); the CA bundle, NTP clock sync, `openssl` and a native-build toolchain; and network failures are classified as **DNS failure** vs **connect/TLS failure** vs **HTTP status**.
 **Stop here if `RESULT: BLOCKED`.** Typical blockers: port taken (it proposes another), < 6 GB free disk, < 1.5 GB RAM, no systemd, no pinned-Node architecture, missing `useradd`/`runuser`.
 If the preflight proposes different ports, pass them to `config` below.
 
