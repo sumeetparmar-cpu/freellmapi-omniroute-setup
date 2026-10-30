@@ -90,6 +90,8 @@ export function inspectBody(policy, body) {
   if (body == null || typeof body !== 'object') return null;
   if (body.n !== undefined && body.n !== 1) return "body field 'n' > 1 is blocked (multiplies quota use)";
   if (body.best_of !== undefined) return "body field 'best_of' is blocked";
+  // Groq's 'flex'/'performance' tiers (and similar) are paid-plan features: only the standard tiers pass.
+  if (body.service_tier !== undefined && !['auto', 'default', 'on_demand'].includes(body.service_tier)) return `body field 'service_tier' must be auto, default or on_demand (other tiers are paid-plan features)`;
   for (const f of policy.forbiddenBodyFields) if (f in body) return `body field '${f}' is blocked (fallback/paid routing)`;
   if (Array.isArray(body.tools)) {
     for (const t of body.tools) {

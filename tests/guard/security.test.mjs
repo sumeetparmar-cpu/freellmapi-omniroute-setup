@@ -315,3 +315,56 @@ test('FUZZ: 400 random hostile requests => guard stays up, every response is san
     assert.ok(r.seen.length >= 5, 'generator sanity: the fuzz must also let some legitimate traffic through (' + r.seen.length + ')');
   } finally { await r.close(); }
 });
+
+// ---- review round 5 ----
+test('Content-Type charset other than utf-8 is refused (the guard always decodes UTF-8; a different charset is a parser mismatch)', async () => {
+  const r = await rig();
+  try {
+    for (const ct of ['application/json; charset=utf-16', 'application/json;charset=utf-7', 'application/json; charset=latin1', 'application/json; boundary=x', 'application/json; charset=utf-8; charset=utf-7']) {
+      const x = await r.call('POST', '/v1/chat/completions', chat(GOOD), { 'content-type': ct });
+      assert.equal(x.status, 415, ct);
+    }
+    for (const ct of ['application/json', 'application/json; charset=utf-8', 'Application/JSON;charset=UTF-8', 'application/json;charset="utf-8"']) {
+      const x = await r.call('POST', '/v1/chat/completions', chat(GOOD), { 'content-type': ct });
+      assert.equal(x.status, 200, ct);
+    }
+    assert.equal(r.seen.length, 4, 'only the four utf-8 requests reached the upstream');
+  } finally { await r.close(); }
+});
+
+test('service_tier: only auto/default/on_demand pass (flex/performance are paid-plan tiers); nothing else about the request changes', async () => {
+  const r = await rig();
+  try {
+    for (const t of ['flex', 'performance', 'priority', 'scale', 7, null, ['auto']]) {
+      const x = await r.call('POST', '/v1/chat/completions', chat(GOOD, { service_tier: t }));
+      assert.equal(x.status, 403, JSON.stringify(t));
+    }
+    for (const t of ['auto', 'default', 'on_demand']) assert.equal((await r.call('POST', '/v1/chat/completions', chat(GOOD, { service_tier: t }))).status, 200, t);
+    assert.equal(r.seen.length, 3);
+  } finally { await r.close(); }
+});
+
+test('catalog-audited: unknown models cannot grow memory or hammer the gateway (bounded cache, failures are cached briefly)', async () => {
+  let modelCalls = 0;
+  const r = await rig('freellmapi', { catalogAudited: true }, (q, s) => {
+    if (q.url === '/v1/models') { modelCalls++; s.writeHead(500); return s.end('{}'); }
+    s.writeHead(200, { 'content-type': 'application/json' }); s.end('{}');
+  });
+  try {
+    for (let i = 0; i < 40; i++) {
+      const x = await r.call('POST', '/v1/chat/completions', chat('not-a-real-model'), { authorization: `Bearer attacker-${i}-aaaaaaaaaaaaaaaa` });
+      assert.equal(x.status, 403);
+    }
+    assert.ok(modelCalls <= 3, `gateway /v1/models was called ${modelCalls} times for 40 refused requests`);
+  } finally { await r.close(); }
+});
+
+test('refused model strings are truncated in the log', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'fg-log-')); const logFile = join(dir, 'g.log');
+  const r = await rig('omniroute', { logFile, quiet: false });
+  try {
+    await r.call('POST', '/v1/chat/completions', chat('a'.repeat(50_000)));
+    const line = readFileSync(logFile, 'utf8').trim().split('\n').pop();
+    assert.ok(line.length < 1000, `log line is ${line.length} bytes`);
+  } finally { await r.close(); }
+});

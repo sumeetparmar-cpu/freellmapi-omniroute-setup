@@ -19,7 +19,7 @@ the policy lists an account precondition per provider; keep every one true:
 | Gemini | API key from a Google Cloud project with **no billing account** linked. Free tier **trains on your prompts and uses human reviewers**. |
 | Mistral | Studio in **Free mode**; never enable pay-as-you-go. Free mode may train on your data; opt out under Admin → Privacy. |
 | OpenRouter | $0 credits (only `:free` variants are ever sent). |
-| Cloudflare | Workers **Free** plan (10,000 Neurons/day); never move to Workers Paid. Eight listed models are paid-only and are blocked. |
+| Cloudflare | Workers **Free** plan (10,000 Neurons/day); never move to Workers Paid. Eight listed models are paid-only and are blocked. **Design limit:** the Cloudflare rule is `@cf/` prefix minus that deny list (the free catalog changes monthly), so a paid-only model Cloudflare adds *later* would pass the guard; on the Free plan Cloudflare refuses it instead of billing, which makes the plan precondition the real protection here. Re-check the deny list against the pricing page when you update the policy. |
 | OVHcloud | **Anonymous tier only**; do not create an OVH API key (it requires a payment method). 2 req/min per IP per model. |
 
 Rate-limit numbers in the policy are *self-imposed ceilings*; only OVH (2/min) and Groq (30 RPM, 1K RPD on the gpt-oss models) are published figures.

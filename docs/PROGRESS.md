@@ -71,3 +71,11 @@ Resume rule: read the last "NEXT" line, continue from there. Facts here are date
 * DONE  e2e-systemd at 92836e5 (GitHub runners, REAL systemd; ubuntu-24.04 = systemd 255, ubuntu-26.04 = systemd 259, cgroup v2, kernel 7.0): real deploy.sh + both real installs; memory.max 1 GiB / 2 GiB, memory.high < max, cpu.max 80000 100000, pids.max 512 read from the kernel; kill -9 of each gateway => new PID, healthy, other gateway's PID unchanged; stop leaves no process of the service user; independent start/stop; StartLimitBurst crash loop ends `failed` and the documented `reset-failed` + `start` recovers; verify.sh and monitor.sh against live units.
         NOT proven: anything on the Hostinger VPS; behaviour under real load or OOM; host reboot persistence.
 * NEXT  release archive for the final head; PR description refresh.
+
+## 2026-10-30 (session 4, security / free-only review)
+
+* REVIEW  Read tools/free-guard.mjs and tools/lib/free-policy.mjs end to end for parser mismatches, resource exhaustion and paid-routing parameters. Secret handling re-checked: credentials only via env/0600 files, none on argv, no xtrace, no TLS-verification bypass anywhere (grep).
+* FOUND+FIXED (4 small gaps, each with a test that fails without the fix; 48 guard tests pass with all fixes): (1) `Content-Type: application/json; charset=<non-utf-8>` was accepted although the guard always decodes UTF-8 (parser mismatch with the gateway) -> 415;
+        (2) with `--catalog-audited` every refused model string caused an upstream `/v1/models` lookup keyed by the caller-chosen Authorization header: unbounded cache + gateway hammering -> cache capped at 16, failures cached 10 s, global pacing of one lookup per 3 s;
+        (3) refused model strings were logged untruncated (up to 1 MB per line) -> 120 chars; (4) `service_tier` (Groq flex/performance are paid-plan tiers) -> only auto/default/on_demand pass.
+* NOTE    Documented design limit: the Cloudflare rule is prefix `@cf/` minus a deny list, so a paid-only model added later would pass the guard; on the Workers Free plan Cloudflare refuses it, so the plan precondition is the real protection (docs/FREE-ONLY.md).

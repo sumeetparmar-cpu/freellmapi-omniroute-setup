@@ -85,17 +85,21 @@ export function createGuard(opts) {
     for (const x of clientHashes) if (timingSafeEqual(h, x)) ok = true; // no early exit: constant work per key
     return ok;
   }
+  let lastLookup = 0;
   const served = new Map(); // sha256(auth) -> { at, ids:Set }
   async function servedModels(auth) {
     const k = createHash('sha256').update(auth ?? '').digest('hex'); const c = served.get(k);
-    if (c && now() - c.at < 60_000) return c.ids;
+    if (c && now() - c.at < (c.ids ? 60_000 : 10_000)) return c.ids;   // failures are remembered briefly so a flood cannot hammer the gateway
+    if (now() - lastLookup < 3_000) return null;   // global pacing: callers pick the Authorization header, so a per-caller cache alone does not stop a flood
+    lastLookup = now();
     const ids = await new Promise((resolve) => {
       const r = http.request({ hostname: up.hostname, port: up.port, path: '/v1/models', method: 'GET', headers: auth ? { authorization: auth } : {}, timeout: 10_000 }, (x) => {
         let t = ''; x.on('data', (d) => (t += d)); x.on('end', () => { try { resolve(new Set(JSON.parse(t).data.map((m) => m.id))); } catch { resolve(null); } });
       });
       r.on('error', () => resolve(null)); r.on('timeout', () => r.destroy()); r.end();
     });
-    if (ids) served.set(k, { at: now(), ids });
+    if (served.size >= 16) served.delete(served.keys().next().value);   // bounded: callers choose the Authorization header
+    served.set(k, { at: now(), ids });
     return ids;
   }
 
@@ -199,8 +203,8 @@ export function createGuard(opts) {
       const raw = Buffer.concat(chunks);
       let meta = { provider: undefined, model: undefined };
       if (req.method === 'POST') {
-        if (!/^application\/json(\s*;.*)?$/i.test(String(req.headers['content-type'] ?? ''))) {
-          return deny(res, 415, 'unsupported_media_type', 'POST bodies must be application/json (other types are parsed differently by the gateway)');
+        if (!/^application\/json\s*(;\s*charset\s*=\s*"?utf-8"?\s*)?$/i.test(String(req.headers['content-type'] ?? ''))) {
+          return deny(res, 415, 'unsupported_media_type', 'POST bodies must be application/json (UTF-8); other types or charsets are parsed differently by the gateway');
         }
         let body;
         try { body = raw.length ? JSON.parse(raw.toString('utf8')) : {}; } catch { return deny(res, 400, 'bad_json', 'body must be JSON'); }
@@ -217,7 +221,7 @@ export function createGuard(opts) {
           const ids = await servedModels(upstreamAuth ?? req.headers.authorization);
           if (ids?.has(body.model)) v = { ok: true, provider: 'freellmapi', model: body.model };
         }
-        if (!v.ok) return deny(res, 403, 'model_blocked', `model blocked by free-only policy: ${v.reason}`, { model: String(body.model ?? ''), provider: v.provider });
+        if (!v.ok) return deny(res, 403, 'model_blocked', `model blocked by free-only policy: ${v.reason}`, { model: String(body.model ?? '').slice(0, 120), provider: v.provider });
         meta = v;
       }
       forward(req, res, url, raw, meta);
