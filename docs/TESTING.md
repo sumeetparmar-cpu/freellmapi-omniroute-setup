@@ -147,3 +147,11 @@ Environment: Ubuntu 24.04 container, Node 24.22.2 (from the npm registry), FreeL
 | Direct-access bypass: gateway key through the guard / guard key against each gateway | live | both 401 |
 
 **Not tested (blocked):** real inference for Groq/Gemini/Mistral/OpenRouter/Cloudflare through either gateway (no keys supplied), **Ubuntu 26.04** (no image available; static review + `os-release` fixture only), the full `e2e-sandbox.sh` rehearsal (it downloads Node from nodejs.org, which this environment's network policy blocks; the pinned-Node path was instead exercised by running the suites under Node 24.11.0), systemd *start* of the units (no running systemd here), and anything on the VPS (not accessed). `systemd-analyze verify` could only check unit syntax here (no deployed `/srv/llm`).
+
+### Real systemd and Ubuntu 26.04 (CI)
+
+`tests/vps/systemd-guard.test.sh` runs in CI on `ubuntu-24.04` **and** `ubuntu-26.04` (GitHub-hosted, real systemd). It installs the guard/audit units through `vps/free-install.sh` with throw-away users and checks: the units run as their gateway's user with
+`NoNewPrivileges`/`ProtectSystem=strict`; a *root* probe inside the unit's sandbox cannot write `/usr`, `/etc`, the other gateway's directory or the toolkit and cannot see home directories; client key required, paid model/route blocked, the gateway receives the upstream key and no
+routing header; `kill -9` => automatic restart with a new PID and the daily counter intact; `systemctl stop` with a never-ending stream open finishes inside the drain window; audit failure => kill flag => 503 => fix => flag cleared => inference resumes; FreeLLMAPI audit
+auto-fixes drift (disable-only); the two guards are independent (stopping one leaves the other serving, separate state files); `monitor.sh` reports the real units; `free-install remove` deletes only the named gateway's units. The existing privileged suite and the end-to-end rehearsal
+also run on both images. The test refuses to run unless root, flagged, systemd is PID 1 and no `llm-guard-*` unit exists.

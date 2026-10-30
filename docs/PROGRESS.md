@@ -41,3 +41,12 @@ Resume rule: read the last "NEXT" line, continue from there. Facts here are date
 * NEXT  push, open PR with test report, build final archive. Deployment to the VPS: NOT performed (by instruction); runbook Stage I added.
 * FIX   PR #1 CI `linux` job failed: tests/vps/free-install.test.sh had only ever run as root; its non-root fallback (copy script to a temp dir + chown) was broken. Reproduced locally as `nobody`
         (9 passed / 8 failed, same as CI), root-caused to the harness (relative source path, chown root:root), replaced with re-exec under `sudo -n` or explicit SKIP (never a pass).
+
+## 2026-10-30 (session 3: completion work)
+
+* DONE  Guard review: abuse run (aborted uploads, resets, mid-stream disconnects, stalled headers) => no crash, no leaked in-flight slots. FOUND+FIXED: SIGTERM with an open stream never exited (systemd would SIGKILL after 15 s) => graceful drain (5 s) + state flush;
+        guard log was unbounded => 5 MB rotation. Regression tests added.
+* DONE  Audit `--auto-fix` (FreeLLMAPI only, disable-only) so catalog drift cannot leave inference down; OmniRoute audit stays read-only.
+* DONE  Monitoring: tools/free-status.mjs + monitor.sh guard/audit/kill-switch/quota checks (tests/vps/monitor-guard.test.sh, 9/9).
+* DONE  Backup/recovery: FOUND that backups omitted the guard's client-key hashes (restore would lock clients out). Now included (hashes only; upstream key + audit credentials deliberately excluded). tests/vps/guard-backup.test.sh 16/16.
+* DONE  CI: new `systemd-guard` job (real systemd) and ubuntu-24.04 + ubuntu-26.04 matrix for linux / vps-privileged / vps-e2e. ubuntu-26.04 is a GitHub-hosted runner (verified in actions/runner-images README).

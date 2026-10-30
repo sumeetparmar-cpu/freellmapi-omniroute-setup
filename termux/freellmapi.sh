@@ -15,6 +15,8 @@ REPO_URL="${FREELLMAPI_REPO_URL:-https://github.com/tashfeenahmed/freellmapi.git
 SRC="$GW_HOME/freellmapi"
 DATA="$GW_HOME/freellmapi-data"
 ENVF="$GW_CONFIG_DIR/freellmapi.env"
+# free-guard client-key HASHES (not secret) ride along in backups so a restore does not lock clients out; the upstream key and audit credentials are deliberately NOT backed up (re-create them from the dashboard).
+GUARD_CLIENTS="$GW_CONFIG_DIR/free-guard.clients"
 LOG="$GW_LOG_DIR/freellmapi.log"
 PORT="$FREELLMAPI_PORT"
 BASE_URL="http://127.0.0.1:$PORT"
@@ -160,7 +162,7 @@ cmd_test_model() {
 cmd_backup() {
   ensure_dirs
   gw_running $NAME && warn "gateway is running; stop it first for a fully consistent SQLite copy (continuing: WAL files are included)"
-  local out; out="$(backup_paths $NAME "${1:-manual}" "$ENVF" "$DATA")" || return 1
+  local out; out="$(backup_paths $NAME "${1:-manual}" "$ENVF" "$DATA" "$GUARD_CLIENTS")" || return 1
   ok "backup: $out"; warn "This archive contains your ENCRYPTION_KEY and encrypted provider keys. Keep it private; never commit it."
 }
 cmd_list_backups() { list_backups $NAME; }
@@ -170,7 +172,7 @@ cmd_restore() {
   confirm "Restore $a over current FreeLLMAPI config+data?" || die "aborted"
   gw_stop $NAME $PORT
   cmd_backup pre-restore >/dev/null || true
-  restore_archive "$a" "$ENVF" "$DATA"; ok "restored $a (a pre-restore backup was taken). Start with: $0 start"
+  restore_archive "$a" "$ENVF" "$DATA" "$GUARD_CLIENTS"; ok "restored $a (a pre-restore backup was taken). Start with: $0 start"
 }
 
 cmd_update() {
@@ -201,7 +203,7 @@ cmd_rollback() {
     local a; a="$(ls -1t "$GW_BACKUP_DIR/$NAME"/*-pre-update.tar.gz 2>/dev/null | head -n1)"
     [ -n "$a" ] || die "no pre-update backup found"
     cmd_backup pre-rollback >/dev/null || true
-    restore_archive "$a" "$ENVF" "$DATA"; ok "data restored from $a"
+    restore_archive "$a" "$ENVF" "$DATA" "$GUARD_CLIENTS"; ok "data restored from $a"
   else
     info "data left as-is. Newer DB migrations may not be reversible; use --with-data if the old version fails to start."
   fi

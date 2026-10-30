@@ -95,12 +95,18 @@ at most 16 requests in flight; counters, cooldowns and per-minute windows are wr
 Guard ports: 3101 (FreeLLMAPI) and 20228 (OmniRoute), overridable with `GUARD_PORT_*`. The audit reads an *optional* `<gw>/config/free-audit.env` (0600, owned by the service user) with the admin credential; without it the audit
 exits 2 (visible as a failed unit) and the guard keeps its current state. Create that file yourself; the toolkit never writes provider or admin secrets.
 
-## Monitoring and quotas
+## Monitoring, quotas, recovery
 
-* `curl http://127.0.0.1:3101/__guard/status` (loopback only): requests today per provider, active cooldowns, blocked/passed counts, the caps in force, kill-switch state. Never contains credentials.
-* Guard log (`--log`): one JSON line per decision (`deny` / `pass` / `cooldown`); no bodies, no headers.
-* `tools/quota-report.mjs` (existing): provider-reported quota from the gateways themselves. Counters in the guard are **local estimates**; the provider's own numbers win.
-* `vps/monitor.sh` remains the resource/health check.
+* `curl http://127.0.0.1:3101/__guard/status` (local only, refused behind a reverse proxy): requests today per provider, active cooldowns, blocked/passed counts, caps in force, kill-switch state. Never contains credentials.
+* `vps/monitor.sh check` (the existing 5-minute monitor) now also reports, for every gateway whose guard is installed: guard unit active, last audit run failed, **kill switch engaged (CRIT)**, active cooldowns (WARN) and each provider's
+  usage against its self-imposed daily cap (WARN at 80%/100%). Implemented by `tools/free-status.mjs`; `tests/vps/monitor-guard.test.sh` covers every level.
+* Guard log (`--log`, default `<gw>/logs/free-guard.log`): one JSON line per decision (`deny` / `pass` / `cooldown`); no bodies, no headers. Size-capped at 5 MB with one rotated generation (`.1`), so it cannot fill the disk.
+* `tools/quota-report.mjs` (existing): provider-reported quota from the gateways themselves. Guard counters are **local estimates**; the provider's own numbers win.
+* **Self-healing (FreeLLMAPI):** the 10-minute audit runs with `--auto-fix`: if catalog sync adds a non-free model it is *disabled* (never enabled, never deleted), the kill flag is cleared and inference resumes without a human. OmniRoute's audit is read-only: a
+  non-free provider or custom node engages the kill switch until you remove it in the dashboard.
+* **Stop/restart:** `systemctl stop` drains in-flight responses for up to 5 s (`GUARD_DRAIN_MS`), flushes state and exits 0; `Restart=always` brings a crashed guard back in 3 s with its counters, cooldowns and rate windows intact.
+* **Backups:** `gwctl <gw> backup` / `restore` carry `config/free-guard.clients` (client-key *hashes*, not secret) so a restore does not lock clients out. They deliberately do **not** carry `free-guard.upstream.key` or `free-audit.env`
+  (secrets): after a restore on a new machine, re-create those two files (gateway API key from the dashboard; admin credential for the audit). Covered by `tests/vps/guard-backup.test.sh`.
 
 ## Credentials
 
