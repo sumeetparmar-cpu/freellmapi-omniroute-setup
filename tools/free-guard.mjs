@@ -14,7 +14,7 @@
 //   'auto' and grouped model ids that the gateway itself serves are then accepted. --kill-file: while that file exists every
 //   inference request is refused (written by 'free-policy ... audit --flag-file' when drift is detected).
 import http from 'node:http';
-import { readFileSync, writeFileSync, renameSync, appendFileSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, renameSync, appendFileSync, mkdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { existsSync } from 'node:fs';
@@ -107,9 +107,17 @@ export function createGuard(opts) {
     const d = utcDay(now());
     if (d !== state.day) { state.day = d; state.counts = {}; dirty = true; }
   }
+  // Size-capped log: when the file passes logMaxBytes it is renamed to <file>.1 (one generation kept) so it can never fill the disk.
+  const logMax = Number(opts.logMaxBytes ?? 5 * 1024 * 1024);
+  let logBytes = 0; if (opts.logFile) { try { logBytes = statSync(opts.logFile).size; } catch { /* new file */ } }
   function log(rec) {
     const line = JSON.stringify({ t: new Date(now()).toISOString(), ...rec });
-    if (opts.logFile) { try { appendFileSync(opts.logFile, line + '\n', { mode: 0o600 }); } catch { /* logging must never break serving */ } }
+    if (opts.logFile) {
+      try {
+        if (logBytes + line.length + 1 > logMax) { renameSync(opts.logFile, `${opts.logFile}.1`); logBytes = 0; }
+        appendFileSync(opts.logFile, line + '\n', { mode: 0o600 }); logBytes += line.length + 1;
+      } catch { /* logging must never break serving */ }
+    }
     else if (!opts.quiet) process.stderr.write(line + '\n');
   }
   function deny(res, status, type, message, extra = {}, headers = {}) {
@@ -240,7 +248,17 @@ export function createGuard(opts) {
   server.headersTimeout = 15_000; server.requestTimeout = 60_000; server.maxHeadersCount = 64; server.keepAliveTimeout = 5_000;
   const timer = setInterval(persist, 5000); timer.unref();
   server.on('close', () => { clearInterval(timer); persist(); });
-  return { server, status, persist };
+  /** Graceful stop: refuse new connections, let in-flight responses finish for `graceMs`, then cut the rest and flush state. */
+  function shutdown(graceMs = 5000) {
+    return new Promise((resolve) => {
+      let done = false;
+      const finish = () => { if (done) return; done = true; clearTimeout(cut); dirty = true; persist(); resolve(); };
+      const cut = setTimeout(() => { server.closeAllConnections?.(); finish(); }, graceMs);
+      server.close(finish);
+      server.closeIdleConnections?.();
+    });
+  }
+  return { server, status, persist, shutdown };
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
@@ -258,6 +276,6 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       catalogAudited: !!a['catalog-audited'], killFile: a['kill-file'], noRateLimit: !!a['no-rate-limit'], maxBodyKb: a['max-body-kb'],
       clientKeysFile: a['client-keys-file'], upstreamKeyFile: a['upstream-key-file'], allowedHosts: a['allow-host'] ?? [] });
     g.server.listen(Number(port), host, () => process.stderr.write(`free-guard ${a.gateway} ${host}:${port} -> ${a.upstream}\n`));
-    for (const s of ['SIGINT', 'SIGTERM']) process.on(s, () => g.server.close(() => process.exit(0)));
+    for (const s of ['SIGINT', 'SIGTERM']) process.once(s, () => g.shutdown(Number(process.env.GUARD_DRAIN_MS ?? 5000)).then(() => process.exit(0)));
   } catch (e) { process.stderr.write(`free-guard: ${e.message}\n`); process.exit(2); }
 }

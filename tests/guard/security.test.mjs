@@ -229,3 +229,34 @@ test('quota cannot be reset by restarts, crashes or clients: write-through state
   assert.equal(await b.post({ date: 'Mon, 01 Jan 2035 00:00:00 GMT', 'x-forwarded-for': '1.1.1.1', 'cache-control': 'no-cache', 'x-request-id': 'new' }), 429);
   for (const x of [a, b]) { x.g.server.close(); x.up.close(); x.up.closeAllConnections?.(); x.g.server.closeAllConnections?.(); }
 });
+
+test('graceful shutdown: SIGTERM with a never-ending stream open exits within the drain window and keeps the counters', async () => {
+  const { spawn } = await import('node:child_process');
+  const up = http.createServer((q, s) => { q.resume(); q.on('end', () => { s.writeHead(200); const t = setInterval(() => s.write('x'), 30); s.on('close', () => clearInterval(t)); }); });
+  const upPort = await listen(up); const stateFile = join(mkdtempSync(join(tmpdir(), 'fgt-')), 's.json');
+  const gp = 39000 + Math.floor(Math.random() * 900);
+  const child = spawn(process.execPath, [new URL('../../tools/free-guard.mjs', import.meta.url).pathname, '--gateway', 'omniroute', '--upstream', `http://127.0.0.1:${upPort}`, '--listen', `127.0.0.1:${gp}`, '--state', stateFile], { stdio: 'ignore', env: { ...process.env, GUARD_DRAIN_MS: '600' } });
+  try {
+    await new Promise((r) => setTimeout(r, 800));
+    const rq = http.request({ host: '127.0.0.1', port: gp, path: '/v1/chat/completions', method: 'POST', headers: { 'content-type': 'application/json' } }, (res) => res.on('data', () => {}));
+    rq.on('error', () => {}); rq.end(JSON.stringify(chat(GOOD)));
+    await new Promise((r) => setTimeout(r, 300));
+    const t0 = Date.now(); child.kill('SIGTERM');
+    const code = await Promise.race([new Promise((r) => child.on('exit', (c) => r(c))), new Promise((r) => setTimeout(() => r('hung'), 4000))]);
+    assert.equal(code, 0, 'guard must exit cleanly, not hang');
+    assert.ok(Date.now() - t0 < 3000, `exited in ${Date.now() - t0} ms`);
+    assert.equal(JSON.parse(readFileSync(stateFile, 'utf8')).counts.groq, 1);
+  } finally { child.kill('SIGKILL'); up.close(); up.closeAllConnections?.(); }
+});
+
+test('the guard log is size-capped (one rotated generation) and never contains credentials', async () => {
+  const { existsSync, statSync } = await import('node:fs');
+  const dir = mkdtempSync(join(tmpdir(), 'fgl-')); const logFile = join(dir, 'g.log');
+  const r = await rig('omniroute', { logFile, logMaxBytes: 2000, quiet: true });
+  try {
+    for (let i = 0; i < 60; i++) await r.call('POST', '/v1/chat/completions', chat('openai/gpt-4o'), { authorization: `Bearer ${CLIENTTOK}` });
+    assert.ok(existsSync(`${logFile}.1`), 'rotated');
+    assert.ok(statSync(logFile).size <= 2000 && statSync(`${logFile}.1`).size <= 2000);
+    assert.ok(!readFileSync(logFile, 'utf8').includes(CLIENTTOK) && !readFileSync(`${logFile}.1`, 'utf8').includes(CLIENTTOK));
+  } finally { await r.close(); }
+});

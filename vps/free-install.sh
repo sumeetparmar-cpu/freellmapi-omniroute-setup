@@ -37,7 +37,7 @@ render() { # render TEMPLATE GW
   local tpl="$HERE/systemd/$1" gw="$2" port; port="$(gw_port "$gw")"; [ -n "$port" ] || port="$(case $gw in freellmapi) echo "$DEFAULT_PORT_FREELLMAPI";; *) echo "$DEFAULT_PORT_OMNIROUTE";; esac)"
   [ -f "$tpl" ] || die "template missing: $tpl"
   sed -e "s|@LLM_ROOT@|$LLM_ROOT|g" -e "s|@USER@|$(gw_user "$gw")|g" -e "s|@PORT@|$port|g" -e "s|@GPORT@|$(guard_port "$gw")|g" \
-      -e "s|@GW@|$gw|g" -e "s|@EXTRA@|$({ [ "$gw" = freellmapi ] && printf '%s' "$EXTRA"; [ "$CLIENTKEYS" = 1 ] && printf ' --client-keys-file %s/%s/config/free-guard.clients --upstream-key-file %s/%s/config/free-guard.upstream.key' "$LLM_ROOT" "$gw" "$LLM_ROOT" "$gw"; })|g" "$tpl"
+      -e "s|@GW@|$gw|g" -e "s|@AUDITFIX@|$([ "$gw" = freellmapi ] && printf ' --auto-fix')|g" -e "s|@EXTRA@|$({ [ "$gw" = freellmapi ] && printf '%s' "$EXTRA"; [ "$CLIENTKEYS" = 1 ] && printf ' --client-keys-file %s/%s/config/free-guard.clients --upstream-key-file %s/%s/config/free-guard.upstream.key' "$LLM_ROOT" "$gw" "$LLM_ROOT" "$gw"; })|g" "$tpl"
 }
 
 step_units() {

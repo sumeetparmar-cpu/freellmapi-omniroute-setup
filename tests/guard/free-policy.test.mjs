@@ -125,3 +125,15 @@ test('classify: OmniRoute ovhanon/<model> follows the OVH allowlist; unknown cus
   assert.equal(classify(policy, 'omniroute', 'ovhanon/Qwen3Guard-Gen-0.6B').ok, false);
   assert.equal(classify(policy, 'omniroute', 'mynode/gpt-oss-20b').ok, false);
 });
+
+test('audit --auto-fix disables drift (never enables), clears the kill flag, and plain audit does not modify anything', async () => {
+  const flag = join(mkdtempSync(join(tmpdir(), 'fp-')), 'flag'); const mock = await adminMock(sample(), structuredClone(keys)); const out = () => {};
+  try {
+    const base = ['freellmapi', 'audit', '--base-url', `http://127.0.0.1:${mock.port}`, '--flag-file', flag];
+    assert.equal(await main(base, { FREELLMAPI_ADMIN_TOKEN: TOKEN }, out), 1);
+    assert.ok(!mock.calls.some((c) => c.startsWith('PATCH')), 'plain audit is read-only');
+    assert.equal(await main([...base, '--auto-fix'], { FREELLMAPI_ADMIN_TOKEN: TOKEN }, out), 0);
+    assert.deepEqual(mock.models.filter((m) => m.enabled).map((m) => m.id).sort(), [1, 4, 7]);
+    assert.ok(!existsSync(flag));
+  } finally { mock.srv.close(); }
+});

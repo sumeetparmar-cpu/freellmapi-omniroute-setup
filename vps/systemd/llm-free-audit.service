@@ -13,7 +13,7 @@ Environment=HOME=@LLM_ROOT@/@GW@/home
 Environment=PATH=@LLM_ROOT@/runtime/node/bin:/usr/bin:/bin
 # Optional 0600 file owned by @USER@ holding ONE of: FREELLMAPI_ADMIN_TOKEN | FREELLMAPI_ADMIN_EMAIL+FREELLMAPI_ADMIN_PASSWORD | OMNIROUTE_MGMT_TOKEN
 EnvironmentFile=-@LLM_ROOT@/@GW@/config/free-audit.env
-ExecStart=@LLM_ROOT@/runtime/node/bin/node @LLM_ROOT@/toolkit/tools/free-policy.mjs @GW@ audit --base-url http://127.0.0.1:@PORT@ --flag-file @LLM_ROOT@/@GW@/state/free-audit.flag
+ExecStart=@LLM_ROOT@/runtime/node/bin/node @LLM_ROOT@/toolkit/tools/free-policy.mjs @GW@ audit --base-url http://127.0.0.1:@PORT@ --flag-file @LLM_ROOT@/@GW@/state/free-audit.flag@AUDITFIX@
 Nice=19
 UMask=0077
 NoNewPrivileges=yes

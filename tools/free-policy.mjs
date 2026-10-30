@@ -2,6 +2,7 @@
 // Free-only policy CLI.
 //   node tools/free-policy.mjs check <freellmapi|omniroute> <model-id>
 //   node tools/free-policy.mjs freellmapi audit|apply --base-url http://127.0.0.1:3001 [--flag-file F]   (env FREELLMAPI_ADMIN_TOKEN | FREELLMAPI_ADMIN_EMAIL+PASSWORD)
+//     --auto-fix: (audit) also run the disable-only 'apply' when violations are found, then re-audit.
 //     --flag-file F: created when an audit finds violations (free-guard --kill-file F then refuses inference), removed when clean.
 //     (v0.16.12 always groups same-named models behind one id; that is safe only because 'apply' leaves just free members enabled.)
 //   node tools/free-policy.mjs omniroute  audit       --base-url http://127.0.0.1:20128 [--flag-file F]   (env OMNIROUTE_MGMT_TOKEN | OMNIROUTE_ADMIN_PASSWORD; read-only)
@@ -91,7 +92,9 @@ export async function main(argv, env = process.env, out = (s) => process.stdout.
       const getKeys = async () => { const k = await api(base, token, 'GET', '/api/keys'); return Array.isArray(k) ? k : k.keys ?? []; };
       let models = await api(base, token, 'GET', '/api/models');
       let bad = auditFreellmapiModels(policy, models, await getKeys());
-      if (a === 'apply') {
+      // --auto-fix (audit only): disable-only self-healing, so catalog drift cannot leave inference down until a human runs 'apply'.
+      const doApply = a === 'apply' || (a === 'audit' && argv.includes('--auto-fix'));
+      if (doApply) {
         for (const v of bad) await api(base, token, 'PATCH', `/api/models/${v.id}`, { enabled: false });
         const keys = await getKeys();
         const covered = new Set([...Object.values(policy.providers).flatMap((r) => r.ids), 'custom']);
