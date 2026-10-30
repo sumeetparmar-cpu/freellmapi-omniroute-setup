@@ -39,3 +39,5 @@ Resume rule: read the last "NEXT" line, continue from there. Facts here are date
         Footprint measured: FreeLLMAPI 0.58 GB disk/~155 MB RSS, OmniRoute 2.8 GB/~610 MB RSS, guard ~61 MB each. No sandbox-path dependencies (git grep clean). Ubuntu 26.04: NOT runnable here; static review only.
 * DONE  RELEASE tooling: scripts/make-release.sh (deterministic tar.gz + sha256, --verify from clean extraction under Node 24.11.0 = the pinned version). check-secrets.sh now works without .git and refuses a vacuous 0-file pass.
 * NEXT  push, open PR with test report, build final archive. Deployment to the VPS: NOT performed (by instruction); runbook Stage I added.
+* FIX   PR #1 CI `linux` job failed: tests/vps/free-install.test.sh had only ever run as root; its non-root fallback (copy script to a temp dir + chown) was broken. Reproduced locally as `nobody`
+        (9 passed / 8 failed, same as CI), root-caused to the harness (relative source path, chown root:root), replaced with re-exec under `sudo -n` or explicit SKIP (never a pass).
