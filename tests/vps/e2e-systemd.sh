@@ -83,9 +83,12 @@ echo "# kernel cgroup limits (the files the kernel enforces, not just the unit t
 ck "cgroup v2 is in use" bash -c "[ \"\$(stat -fc %T /sys/fs/cgroup)\" = cgroup2fs ]"
 ck "freellmapi: memory.max = 1 GiB"  bash -c "[ \"\$(cat $(cg freellmapi)/memory.max)\" = 1073741824 ]"
 ck "omniroute:  memory.max = 2 GiB"  bash -c "[ \"\$(cat $(cg omniroute)/memory.max)\" = 2147483648 ]"
-ck "memory.high is set below memory.max (reclaim pressure before the hard limit)" bash -c "for g in freellmapi omniroute; do h=\$(cat $(cg \$g)/memory.high); m=\$(cat $(cg \$g)/memory.max); [ \"\$h\" != max ] && [ \"\$h\" -lt \"\$m\" ] || exit 1; done"
-ck "cpu.max = 80% of one CPU for both" bash -c "for g in freellmapi omniroute; do [ \"\$(cat $(cg \$g)/cpu.max)\" = '80000 100000' ] || exit 1; done"
-ck "pids.max = 512 for both"           bash -c "for g in freellmapi omniroute; do [ \"\$(cat $(cg \$g)/pids.max)\" = 512 ] || exit 1; done"
+for g in freellmapi omniroute; do
+  c="$(cg $g)"
+  ck "$g: memory.high is set below memory.max (reclaim pressure before the hard limit)" bash -c "h=\$(cat '$c/memory.high'); m=\$(cat '$c/memory.max'); [ \"\$h\" != max ] && [ \"\$h\" -lt \"\$m\" ]"
+  ck "$g: cpu.max = 80% of one CPU" bash -c "[ \"\$(cat '$c/cpu.max')\" = '80000 100000' ]"
+  ck "$g: pids.max = 512" bash -c "[ \"\$(cat '$c/pids.max')\" = 512 ]"
+done
 for g in freellmapi omniroute; do info "$g memory.current=$(( $(cat "$(cg $g)/memory.current") / 1048576 )) MiB (limit $(( $(cat "$(cg $g)/memory.max") / 1048576 )) MiB), pids.current=$(cat "$(cg $g)/pids.current")"; done
 ck "gateways listen on 127.0.0.1 only" python3 - "$PF" "$PO" <<'PY'
 import sys
@@ -133,11 +136,12 @@ ck "verify.sh passes (server unchanged, services contained) with systemd-managed
 
 echo "# crash LOOP: StartLimitBurst=5 stops a flapping service instead of respawning it forever; the documented recovery works"
 systemctl reset-failed llm-freellmapi.service 2>/dev/null
-n=0; last="$(prop freellmapi MainPID)"
+n=0
 for _ in 1 2 3 4 5 6 7 8; do
   [ "$(prop freellmapi ActiveState)" = failed ] && break
-  p="$(wait_new_pid freellmapi "$last" 40)" || break
-  last="$p"; kill -9 "$p" 2>/dev/null; n=$((n+1))
+  p="$(wait_new_pid freellmapi 0 40)" || break   # any live MainPID
+  kill -9 "$p" 2>/dev/null; n=$((n+1))
+  for _ in $(seq 1 20); do [ "$(prop freellmapi MainPID)" != "$p" ] && break; sleep 0.5; done
 done
 for _ in $(seq 1 30); do [ "$(prop freellmapi ActiveState)" = failed ] && break; sleep 1; done
 ck "freellmapi: after repeated crashes the unit is FAILED with start-limit-hit ($n kills)" bash -c "[ \"\$(systemctl show llm-freellmapi.service -p ActiveState --value)\" = failed ] && [ \"\$(systemctl show llm-freellmapi.service -p Result --value)\" = start-limit-hit ]"
