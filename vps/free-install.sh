@@ -3,13 +3,15 @@
 #
 #   free-install.sh [--apply] <step> [gateway] [options]
 #
-#   units  [--catalog-audited]   render + systemd-analyze verify + install llm-guard-<gw>.service, llm-free-audit-<gw>.service/.timer
+#   units  [--catalog-audited] [--client-keys]   render + systemd-analyze verify + install llm-guard-<gw>.service, llm-free-audit-<gw>.service/.timer
 #                                for both gateways (NOT enabled, NOT started). --catalog-audited only after
 #                                'free-policy.mjs freellmapi apply' (see docs/FREE-ONLY.md).
 #   enable <freellmapi|omniroute>  enable --now the guard and the audit timer, then check the guard answers on its port
 #   status                         read-only summary
 #   remove <freellmapi|omniroute>  stop + disable ONLY that gateway's guard/audit units and delete those unit files
 #
+# --client-keys: clients must present a guard key (mint with tools/free-guard.mjs --new-client-key) and the gateway key lives in
+#   <gw>/config/free-guard.upstream.key (0600, service user); both files must exist before 'enable'.
 # Ports: guard listens on 127.0.0.1:$GUARD_PORT_FREELLMAPI (3101) / $GUARD_PORT_OMNIROUTE (20228); they must be free.
 # Never touched: the gateway units, Docker, Caddy, n8n, SUPPAR, EARNIX, firewall, sshd, sudoers, cron, databases.
 set -uo pipefail
@@ -17,10 +19,10 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/vps-common.sh
 . "$HERE/lib/vps-common.sh"
 
-ARGS=(); EXTRA=""
+ARGS=(); EXTRA=""; CLIENTKEYS=0
 STEP="${1:-}"; [ "$STEP" = "--apply" ] && { APPLY=1; shift; STEP="${1:-}"; }
 [ $# -gt 0 ] && shift
-while [ $# -gt 0 ]; do case "$1" in --catalog-audited) EXTRA=" --catalog-audited";; --apply) APPLY=1;; *) ARGS+=("$1");; esac; shift; done
+while [ $# -gt 0 ]; do case "$1" in --catalog-audited) EXTRA=" --catalog-audited";; --client-keys) CLIENTKEYS=1;; --apply) APPLY=1;; *) ARGS+=("$1");; esac; shift; done
 [ "$APPLY" = 1 ] && { is_root || die "--apply needs root"; assert_safe_root; }
 
 GUARD_PORT_FREELLMAPI="${GUARD_PORT_FREELLMAPI:-3101}"; GUARD_PORT_OMNIROUTE="${GUARD_PORT_OMNIROUTE:-20228}"
@@ -35,7 +37,7 @@ render() { # render TEMPLATE GW
   local tpl="$HERE/systemd/$1" gw="$2" port; port="$(gw_port "$gw")"; [ -n "$port" ] || port="$(case $gw in freellmapi) echo "$DEFAULT_PORT_FREELLMAPI";; *) echo "$DEFAULT_PORT_OMNIROUTE";; esac)"
   [ -f "$tpl" ] || die "template missing: $tpl"
   sed -e "s|@LLM_ROOT@|$LLM_ROOT|g" -e "s|@USER@|$(gw_user "$gw")|g" -e "s|@PORT@|$port|g" -e "s|@GPORT@|$(guard_port "$gw")|g" \
-      -e "s|@GW@|$gw|g" -e "s|@EXTRA@|$([ "$gw" = freellmapi ] && printf '%s' "$EXTRA")|g" "$tpl"
+      -e "s|@GW@|$gw|g" -e "s|@EXTRA@|$({ [ "$gw" = freellmapi ] && printf '%s' "$EXTRA"; [ "$CLIENTKEYS" = 1 ] && printf ' --client-keys-file %s/%s/config/free-guard.clients --upstream-key-file %s/%s/config/free-guard.upstream.key' "$LLM_ROOT" "$gw" "$LLM_ROOT" "$gw"; })|g" "$tpl"
 }
 
 step_units() {

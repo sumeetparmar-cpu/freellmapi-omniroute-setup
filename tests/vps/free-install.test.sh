@@ -25,6 +25,7 @@ t "guard targets the right upstream"    bash -c "grep -q -- '--upstream http://1
 t "guards run as the gateway users"     bash -c "grep -q '^User=llmfree' $U/llm-guard-freellmapi.service && grep -q '^User=llmomni' $U/llm-guard-omniroute.service"
 t "kill-file shared by guard and audit" bash -c "grep -q 'state/free-audit.flag' $U/llm-guard-omniroute.service && grep -q -- '--flag-file $LLM_ROOT/omniroute/state/free-audit.flag' $U/llm-free-audit-omniroute.service"
 t "catalog-audited only when asked"     bash -c "! grep -q catalog-audited $U/llm-guard-freellmapi.service"
+t "client keys are opt-in"              bash -c "! grep -q client-keys $U/llm-guard-omniroute.service && rm -f $U/* && $FI --apply units --client-keys >/dev/null 2>&1 && grep -q -- '--client-keys-file $LLM_ROOT/omniroute/config/free-guard.clients --upstream-key-file $LLM_ROOT/omniroute/config/free-guard.upstream.key' $U/llm-guard-omniroute.service"
 t "units are sandboxed"                 bash -c "grep -q '^NoNewPrivileges=yes' $U/llm-guard-omniroute.service && grep -q '^ProtectSystem=strict' $U/llm-guard-omniroute.service && grep -q '^CapabilityBoundingSet=\$' $U/llm-guard-omniroute.service"
 t "no secrets in any unit"              bash -c "! grep -hiE 'password|token=|apikey|secret' $U/* | grep -v '^#'"
 t "audit credential file is optional (-) and outside the unit" bash -c "grep -q '^EnvironmentFile=-$LLM_ROOT/freellmapi/config/free-audit.env' $U/llm-free-audit-freellmapi.service"
