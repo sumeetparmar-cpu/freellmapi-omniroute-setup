@@ -199,9 +199,12 @@ echo "# monitor (read-only; against mock status endpoints)"
 start_mock() { node "$ROOT/tests/quota/mock-gateways.mjs" "$1" ok "$2" >/dev/null 2>&1 & PIDS+=("$!"); for _ in $(seq 40); do [ "$(http_code "http://127.0.0.1:$2/$3")" = 200 ] && return 0; sleep 0.2; done; return 1; }
 MROOT="$TMP/llm-mon"; mkdir -p "$MROOT"; printf 'PORT_FREELLMAPI=18411\nPORT_OMNIROUTE=18412\n' > "$MROOT/deploy.conf"
 start_mock freellmapi 18411 api/ping; start_mock omniroute 18412 api/health/ping
-t  "monitor: healthy gateways -> OVERALL OK, exit 0" bash -c 'mon "$ROOT/vps/monitor.sh" check | grep -q "OVERALL: OK"'
+# The healthy case is about the GATEWAY logic (mock endpoints answer 200), so host resources are pinned out of the way: a CI runner with
+# little free disk or a busy CPU must not decide this test (the threshold logic itself is tested by the low-disk / low-memory cases below).
+MON_FREE='MON_DISK_WARN_GB=0 MON_DISK_CRIT_GB=0 MON_AVAIL_WARN_MB=0 MON_AVAIL_CRIT_MB=0 MON_MEM_WARN_PCT=101 MON_LOAD_FACTOR=1000'; export MON_FREE
+t  "monitor: healthy gateways -> OVERALL OK, exit 0" bash -c 'o=$(mon $MON_FREE "$ROOT/vps/monitor.sh" check); rc=$?; echo "$o"; [ $rc = 0 ] && echo "$o" | grep -q "OVERALL: OK"'
 t  "monitor: reports each gateway's health"         bash -c 'o=$(mon "$ROOT/vps/monitor.sh" check); echo "$o" | grep -qE "freellmapi.health +HTTP 200" && echo "$o" | grep -qE "omniroute.health +HTTP 200"'
-t  "monitor --json is valid JSON with a status"      bash -c 'mon "$ROOT/vps/monitor.sh" check --json | node -e "const d=JSON.parse(require(\"fs\").readFileSync(0));process.exit(d.status===\"OK\"&&d.checks.length>4?0:1)"'
+t  "monitor --json is valid JSON with a status"      bash -c 'mon $MON_FREE "$ROOT/vps/monitor.sh" check --json | tee "$TMP/mon.json" | node -e "const d=JSON.parse(require(\"fs\").readFileSync(0));process.exit(d.status===\"OK\"&&d.checks.length>4?0:1)" || { cat "$TMP/mon.json"; exit 1; }'
 t  "monitor --log appends a line (0600)"             bash -c 'mon "$ROOT/vps/monitor.sh" check --log "$TMP/mon.log" >/dev/null; [ -s "$TMP/mon.log" ] && [ "$(stat -c %a "$TMP/mon.log")" = 600 ]'
 t  "monitor: low-disk threshold -> WARN, exit 1"     bash -c 'mon MON_DISK_WARN_GB=99999999 MON_DISK_CRIT_GB=1 "$ROOT/vps/monitor.sh" check >/dev/null; [ $? = 1 ]'
 t  "monitor: low-memory threshold -> CRIT, exit 2"   bash -c 'mon MON_AVAIL_CRIT_MB=99999999 "$ROOT/vps/monitor.sh" check >/dev/null; [ $? = 2 ]'
