@@ -131,7 +131,7 @@ test('self-imposed daily cap blocks locally and resets at 00:00 UTC', async () =
   const upPort = await listen(up); let clock = Date.UTC(2026, 9, 30, 23, 0, 0);
   const g = createGuard({ gateway: 'omniroute', upstream: `http://127.0.0.1:${upPort}`, policy: p2, now: () => clock, quiet: true });
   const port = await listen(g.server);
-  const post = () => new Promise((res) => { const r = http.request({ host: '127.0.0.1', port, path: '/v1/chat/completions', method: 'POST' }, (x) => { x.resume(); x.on('end', () => res(x.statusCode)); }); r.end(JSON.stringify(chat('groq/openai/gpt-oss-20b'))); });
+  const post = () => new Promise((res) => { const r = http.request({ host: '127.0.0.1', port, path: '/v1/chat/completions', method: 'POST', headers: { 'content-type': 'application/json' } }, (x) => { x.resume(); x.on('end', () => res(x.statusCode)); }); r.end(JSON.stringify(chat('groq/openai/gpt-oss-20b'))); });
   try {
     assert.deepEqual([await post(), await post(), await post(), await post()], [200, 200, 200, 429]);
     clock += 2 * 3600_000;
@@ -143,7 +143,7 @@ test('unreachable gateway returns 502 and nothing else is tried', async () => {
   const g = createGuard({ gateway: 'omniroute', upstream: 'http://127.0.0.1:1', policy, quiet: true });
   const port = await listen(g.server);
   try {
-    const code = await new Promise((res) => { const r = http.request({ host: '127.0.0.1', port, path: '/v1/chat/completions', method: 'POST' }, (x) => { x.resume(); res(x.statusCode); }); r.end(JSON.stringify(chat('groq/openai/gpt-oss-20b'))); });
+    const code = await new Promise((res) => { const r = http.request({ host: '127.0.0.1', port, path: '/v1/chat/completions', method: 'POST', headers: { 'content-type': 'application/json' } }, (x) => { x.resume(); res(x.statusCode); }); r.end(JSON.stringify(chat('groq/openai/gpt-oss-20b'))); });
     assert.equal(code, 502);
   } finally { g.server.close(); g.server.closeAllConnections?.(); }
 });
@@ -196,7 +196,7 @@ test('catalog-audited FreeLLMAPI: grouped ids are accepted only if the gateway s
   const kill = join(mkdtempSync(join(tmpdir(), 'fg-')), 'kill');
   const g = createGuard({ gateway: 'freellmapi', upstream: `http://127.0.0.1:${upPort}`, policy, quiet: true, catalogAudited: true, killFile: kill });
   const port = await listen(g.server);
-  const post = (model) => new Promise((res) => { const r = http.request({ host: '127.0.0.1', port, path: '/v1/chat/completions', method: 'POST', headers: { authorization: 'Bearer x' } }, (x) => { let t = ''; x.on('data', (d) => (t += d)); x.on('end', () => res({ status: x.statusCode, t })); }); r.end(JSON.stringify(chat(model))); });
+  const post = (model) => new Promise((res) => { const r = http.request({ host: '127.0.0.1', port, path: '/v1/chat/completions', method: 'POST', headers: { authorization: 'Bearer x', 'content-type': 'application/json' } }, (x) => { let t = ''; x.on('data', (d) => (t += d)); x.on('end', () => res({ status: x.statusCode, t })); }); r.end(JSON.stringify(chat(model))); });
   try {
     assert.equal((await post('gpt-oss-120b-grouped')).status, 200);
     assert.equal((await post('totally-unknown-model')).status, 403);
@@ -216,7 +216,7 @@ test('restart recovery: daily counters and cooldowns survive a guard restart (st
   const up = http.createServer((q, s) => { q.resume(); q.on('end', () => { s.writeHead(200); s.end('{}'); }); });
   const upPort = await listen(up); const clock = Date.UTC(2026, 9, 30, 10, 0, 0);
   const boot = async () => { const g = createGuard({ gateway: 'omniroute', upstream: `http://127.0.0.1:${upPort}`, policy: p2, now: () => clock, quiet: true, stateFile }); return { g, port: await listen(g.server) }; };
-  const post = (port) => new Promise((res) => { const r = http.request({ host: '127.0.0.1', port, path: '/v1/chat/completions', method: 'POST' }, (x) => { x.resume(); x.on('end', () => res(x.statusCode)); }); r.end(JSON.stringify(chat('groq/openai/gpt-oss-20b'))); });
+  const post = (port) => new Promise((res) => { const r = http.request({ host: '127.0.0.1', port, path: '/v1/chat/completions', method: 'POST', headers: { 'content-type': 'application/json' } }, (x) => { x.resume(); x.on('end', () => res(x.statusCode)); }); r.end(JSON.stringify(chat('groq/openai/gpt-oss-20b'))); });
   try {
     let { g, port } = await boot();
     assert.deepEqual([await post(port), await post(port)], [200, 200]);

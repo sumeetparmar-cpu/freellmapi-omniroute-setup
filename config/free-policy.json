@@ -18,7 +18,8 @@
     "POST /v1/chat/completions",
     "POST /v1/embeddings"
   ],
-  "forbiddenBodyFields": ["models", "route", "fallbacks", "fallback_models", "plugins", "web_search_options", "provider", "transforms"],
+  "forbiddenBodyFields": ["extra_body", "models", "route", "fallbacks", "fallback_models", "plugins", "web_search_options", "provider", "transforms"],
+  "blockedGroupedIds": ["fusion"],
   "allowedToolTypes": ["function"],
   "providers": {
     "groq": {

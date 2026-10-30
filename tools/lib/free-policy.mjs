@@ -81,6 +81,8 @@ export function routeAllowed(policy, method, urlPath) {
 /** Returns a reason string if the request body tries to enable paid/fallback features, else null. */
 export function inspectBody(policy, body) {
   if (body == null || typeof body !== 'object') return null;
+  if (body.n !== undefined && body.n !== 1) return "body field 'n' > 1 is blocked (multiplies quota use)";
+  if (body.best_of !== undefined) return "body field 'best_of' is blocked";
   for (const f of policy.forbiddenBodyFields) if (f in body) return `body field '${f}' is blocked (fallback/paid routing)`;
   if (Array.isArray(body.tools)) {
     for (const t of body.tools) {

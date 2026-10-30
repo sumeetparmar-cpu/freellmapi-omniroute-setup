@@ -24,3 +24,12 @@ Resume rule: read the last "NEXT" line, continue from there. Facts here are date
 * DONE  Audit can log in with email+password from a 0600 env file (no stored token). Restart-recovery test (state file survives restart; corrupt state tolerated).
 * DONE  docs/FREE-ONLY.md runbook; PROVIDERS-AND-COSTS.md "Verified 2026-10-30" section with sources; TESTING.md "Free-only layer"; CI runs tests/guard + free-install test.
 * NEXT  full regression of existing suites; quota-report against live gateways; stop scratch gateways; push branch; final report. (VPS not accessed: no host/credentials in this environment.)
+
+## 2026-10-30 (session 2: hardening)
+
+* DONE  SECURITY: guard hardened. Header ALLOWLIST (strips x-omniroute-*, x-freellm-*, cookies, session, forwarding headers), Host-header check (DNS rebinding), status endpoint refused behind a reverse proxy,
+        POST must be application/json, query string dropped, model must be a plain printable-ASCII string, n>1/best_of/extra_body blocked, `fusion` blocked, in-flight cap (16), server timeouts,
+        write-through persistence of counters/cooldowns/rate windows, optional CLIENT KEYS (clients hold a guard key; the gateway key sits in a 0600 file they cannot read).
+        tests/guard/security.test.mjs: 12 adversarial tests (40 bad model strings, 28 route tricks, smuggling, streaming, crash/restart quota) all pass.
+* DONE  Live: gateway key useless through the guard, guard key useless against either gateway directly; both gateways + guards listen on 127.0.0.1 only; no TLS-verification bypass anywhere in the repo.
+* CORRECTION  My earlier "no gateway/guard ports left listening" check used `ss`, which is not installed here, so it proved nothing; the scratch gateways were still running. Verified now via /proc/net/tcp.
