@@ -36,6 +36,8 @@ die()  { err "$*"; exit 1; }
 
 have() { command -v "$1" >/dev/null 2>&1; }
 is_termux() { [ -n "${TERMUX_VERSION:-}" ] || [ -d /data/data/com.termux/files/usr ]; }
+# node-gyp (native modules such as better-sqlite3) aborts on Termux unless the NDK path is defined, even empty: well-known Termux workaround.
+if is_termux && [ -z "${GYP_DEFINES:-}" ]; then export GYP_DEFINES="android_ndk_path=''"; fi
 
 ensure_dirs() {
   umask 077

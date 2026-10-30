@@ -55,7 +55,7 @@ bash $G logs freellmapi    # or: omniroute | guard-freellmapi | guard-omniroute
 
 ## What needs a real phone (NOT proven by any Linux/CI test)
 * Termux package names and versions (`nodejs` current, `python`, `build-essential`, `util-linux` for `setsid`).
-* **Native modules building on Android (Bionic libc, aarch64)**: the biggest risk. FreeLLMAPI tolerates a failed optional `better-sqlite3` build; OmniRoute's native dependencies are unverified on Android.
+* **Native modules building on Android (Bionic libc, aarch64)**: the biggest risk (the scripts set Termux's known `GYP_DEFINES="android_ndk_path=''"` workaround for `node-gyp`, untested on a phone). FreeLLMAPI tolerates a failed optional `better-sqlite3` build; OmniRoute's native dependencies are unverified on Android.
 * RAM and storage: OmniRoute measured ~610 MB RAM / 2.8 GB disk on Linux, FreeLLMAPI ~155 MB / 0.6 GB. Phone figures are unmeasured; if it struggles, run one gateway at a time.
 * `gh auth login` device flow inside Termux; `termux-wake-lock`; Termux:Boot; Android's background-process killing.
 * Install time on mobile data (downloads are retried with back-off if the connection drops).
