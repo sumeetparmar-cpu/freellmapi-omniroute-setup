@@ -2,6 +2,9 @@
 
 **Honest status first.** The bootstrap below is tested for real on Linux (CI, Ubuntu 24.04 and 26.04: real installs, real guards, restart and crash recovery) and, once, with genuine OVH inference through both guards. It has **not been run on Android or in Termux**. Linux tests do not prove Android works; the list of what only a phone can prove is at the bottom. If something fails, the script stops with the exact next step, and running the same command again resumes.
 
+## Step 0: see what is already on the phone (read-only; installs and changes nothing)
+Run `bash ~/freellmapi-omniroute-setup/termux/diagnose.sh` (or paste the self-contained version from the chat if the repo is not on the phone yet). It reports versions, locations, whether each gateway is built, whether it is running, which settings exist (names only, never values), and prints the exact next step. **Nothing that already works is reinstalled, updated or deleted:** the bootstrap treats a gateway as installed when its files are on disk, repairs a partial one in place, and only starts a stopped one. If you already created a FreeLLMAPI account or changed OmniRoute's password in a dashboard, give your login once: `FREELLMAPI_ADMIN_EMAIL=... FREELLMAPI_ADMIN_PASSWORD=... OMNIROUTE_ADMIN_PASSWORD=... bash ~/freellmapi-omniroute-setup/termux/bootstrap.sh` (stored only in mode-600 files on the phone).
+
 ## The command (paste into Termux, installed from **F-Droid**, not the Play Store)
 
 ```bash
@@ -12,7 +15,7 @@ The **one** thing you do by hand: this repository is private, so `gh auth login`
 
 ## What the command does (all idempotent: safe to run again)
 1. Installs packages (git, curl, openssl, nodejs, python, build tools, util-linux) and audits the phone (RAM, storage, Node version): stops with a plain message on a blocker.
-2. Installs the **tested versions**: FreeLLMAPI v0.16.12 and OmniRoute 3.8.52 (first time: several minutes, ~3 GB of storage). Existing installs and data are reused, never overwritten.
+2. Installs the **tested versions** only if missing: FreeLLMAPI v0.16.12 and OmniRoute 3.8.52 (first time: several minutes, ~3 GB of storage). Existing installs, configs and data are reused as they are (not updated, not edited, not deleted).
 3. Starts both and configures the **keyless OVH anonymous route** through each gateway's own API: the FreeLLMAPI custom endpoint, and the OmniRoute node `ovhanon` plus one active keyless connection. No account, no API key, no billing.
 4. Generates the credentials (owner login, gateway keys, guard keys), all in `~/llm-gateways/config/` with mode 600. Nothing is printed except your two **guard keys** in the final summary.
 5. Prunes and audits: FreeLLMAPI keeps only verified-free models enabled (disable-only, never deletes); OmniRoute is checked for any provider outside the policy. A violation stops the script before anything is exposed.

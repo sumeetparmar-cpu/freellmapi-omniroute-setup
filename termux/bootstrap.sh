@@ -55,11 +55,19 @@ bash "$HERE/audit-env.sh" || stop_here "the audit found a BLOCKER (see above)" "
 ensure_dirs; mkdir -p "$GW_STATE_DIR"
 
 step "Install FreeLLMAPI $FREELLMAPI_REF and OmniRoute $OMNIROUTE_VERSION (first time: several minutes)"
-if [ -d "$GW_HOME/freellmapi/server/dist" ] && [ -f "$GW_STATE_DIR/freellmapi.installed_commit" ]; then ok "FreeLLMAPI already installed (kept as is)"
+# "Installed" means what is on disk, not a marker file: a gateway that was set up some other way and works is reused, never reinstalled or updated.
+if [ -d "$GW_HOME/freellmapi/server/dist" ] && [ -d "$GW_HOME/freellmapi/node_modules" ]; then
+  [ -f "$GW_STATE_DIR/freellmapi.installed_commit" ] || git -C "$GW_HOME/freellmapi" rev-parse HEAD > "$GW_STATE_DIR/freellmapi.installed_commit" 2>/dev/null || true
+  ok "FreeLLMAPI already installed ($(git -C "$GW_HOME/freellmapi" describe --tags --always 2>/dev/null)); kept as is, not updated"
 else FL install || stop_here "FreeLLMAPI install failed" "read the last lines above (a native-module build error usually means build tools or storage are missing)"; fi
-if [ -d "$GW_HOME/omniroute/node_modules/omniroute" ] && [ -f "$GW_STATE_DIR/omniroute.installed_version" ]; then ok "OmniRoute already installed (kept as is)"
-else OR install || stop_here "OmniRoute install failed" "read the last lines above; OmniRoute needs Node >= 22.22.2 and about 3 GB of free storage"; fi
-env_set "$GW_CONFIG_DIR/omniroute.env" OMNIROUTE_HEADLESS 0   # dashboard on (still 127.0.0.1 only, password protected)
+OR_ENTRY="$GW_HOME/omniroute/node_modules/omniroute"
+if [ -f "$OR_ENTRY/bin/omniroute.mjs" ]; then
+  [ -f "$GW_STATE_DIR/omniroute.installed_version" ] || node -e 'console.log(require(process.argv[1]+"/package.json").version)' "$OR_ENTRY" > "$GW_STATE_DIR/omniroute.installed_version" 2>/dev/null || true
+  ok "OmniRoute already installed ($(tr -d '\n' < "$GW_STATE_DIR/omniroute.installed_version" 2>/dev/null)); kept as is, not updated"
+else NEW_OR=1; OR install || stop_here "OmniRoute install failed" "read the last lines above; OmniRoute needs Node >= 22.22.2 and about 3 GB of free storage"; fi
+# Dashboard on (still 127.0.0.1 only, password protected) -- but only for an OmniRoute installed by THIS run; an existing config is never edited.
+if [ "${NEW_OR:-0}" = 1 ]; then env_set "$GW_CONFIG_DIR/omniroute.env" OMNIROUTE_HEADLESS 0
+elif [ "$(env_get "$GW_CONFIG_DIR/omniroute.env" OMNIROUTE_HEADLESS 2>/dev/null)" = 1 ]; then info "OmniRoute dashboard is off in your existing config (left untouched). To turn it on: set OMNIROUTE_HEADLESS=0 in $GW_CONFIG_DIR/omniroute.env and restart."; fi
 
 step "Start both gateways"
 FL start || stop_here "FreeLLMAPI did not start" "bash $HERE/gateways.sh logs freellmapi"
@@ -78,7 +86,7 @@ step "Prune and audit: only verified-free models stay enabled"
   # shellcheck disable=SC1090
   . "$FL_ADMIN" 2>/dev/null || true
   export FREELLMAPI_ADMIN_EMAIL="${FREELLMAPI_ADMIN_EMAIL:-}" FREELLMAPI_ADMIN_PASSWORD="${FREELLMAPI_ADMIN_PASSWORD:-}"
-  OMNIROUTE_ADMIN_PASSWORD="$(env_get "$GW_CONFIG_DIR/omniroute.env" INITIAL_PASSWORD)"; export OMNIROUTE_ADMIN_PASSWORD
+  OMNIROUTE_ADMIN_PASSWORD="${OMNIROUTE_ADMIN_PASSWORD:-$(env_get "$GW_CONFIG_DIR/omniroute.env" INITIAL_PASSWORD)}"; export OMNIROUTE_ADMIN_PASSWORD
   GD audit
 ) || stop_here "the free-only audit reported a violation" "nothing paid may stay enabled; read the lines above (they name the model/provider), disable it in the dashboard, and re-run"
 [ -f "$GW_STATE_DIR/freellmapi.catalog-audited" ] || stop_here "FreeLLMAPI's catalog audit did not complete" "bash $HERE/gateways.sh doctor"

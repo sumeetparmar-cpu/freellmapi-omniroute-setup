@@ -56,21 +56,28 @@ async function freellmapi() {
   const credFile = opt('cred-file'); const keyOut = opt('key-out');
   if (!credFile || !keyOut) die('--cred-file and --key-out are required');
   let cred = readKv(credFile);
+  const st = await http('GET', '/api/auth/status');
+  const needsSetup = !!st.json?.needsSetup;
+  if (!cred.FREELLMAPI_ADMIN_PASSWORD && process.env.FREELLMAPI_ADMIN_PASSWORD) {
+    // The owner already has an account (made in the dashboard): use the login they supplied for this run and keep it in a 0600 file.
+    cred = { FREELLMAPI_ADMIN_EMAIL: process.env.FREELLMAPI_ADMIN_EMAIL ?? OWNER_EMAIL, FREELLMAPI_ADMIN_PASSWORD: process.env.FREELLMAPI_ADMIN_PASSWORD };
+    writeSecret(credFile, `FREELLMAPI_ADMIN_EMAIL=${cred.FREELLMAPI_ADMIN_EMAIL}\nFREELLMAPI_ADMIN_PASSWORD=${cred.FREELLMAPI_ADMIN_PASSWORD}\n`);
+  }
   if (!cred.FREELLMAPI_ADMIN_PASSWORD) {
+    if (!needsSetup) die('FreeLLMAPI already has an owner account that this tool did not create. Nothing is deleted or changed. Run again with your existing login in the environment: FREELLMAPI_ADMIN_EMAIL=you@example.com FREELLMAPI_ADMIN_PASSWORD=... (it is kept only in a mode-600 file on this device).');
     // Passwords need upper/lower/digit/symbol; hex alone would not pass the gateway's rule.
     cred = { FREELLMAPI_ADMIN_EMAIL: OWNER_EMAIL, FREELLMAPI_ADMIN_PASSWORD: `Aa1-${randomBytes(18).toString('hex')}` };
     writeSecret(credFile, `FREELLMAPI_ADMIN_EMAIL=${cred.FREELLMAPI_ADMIN_EMAIL}\nFREELLMAPI_ADMIN_PASSWORD=${cred.FREELLMAPI_ADMIN_PASSWORD}\n`);
   }
   const creds = { email: cred.FREELLMAPI_ADMIN_EMAIL ?? OWNER_EMAIL, password: cred.FREELLMAPI_ADMIN_PASSWORD };
-  const st = await http('GET', '/api/auth/status');
-  if (st.json?.needsSetup) {
+  if (needsSetup) {
     const r = await http('POST', '/api/auth/setup', { body: creds });
     if (r.status >= 300) die(`could not create the FreeLLMAPI owner account (HTTP ${r.status})`);
     log('freellmapi: owner account created (credentials in the 0600 file ' + path.basename(credFile) + ')');
   }
   const lg = await http('POST', '/api/auth/login', { body: creds });
   const token = lg.json?.token;
-  if (!token) die('FreeLLMAPI already has an owner account that this tool did not create. Remove ~/llm-gateways/freellmapi-data/ (only if it holds nothing you need) and re-run, or add the OVH endpoint in the dashboard (docs/FREE-ONLY.md).');
+  if (!token) die('FreeLLMAPI rejected the stored/supplied login. Nothing was changed. Run again with the correct FREELLMAPI_ADMIN_EMAIL / FREELLMAPI_ADMIN_PASSWORD, or delete only the file ' + path.basename(credFile) + ' to let this tool use a fresh one (only possible on a brand-new install).');
   const keys = await http('GET', '/api/keys', { token });
   const list = Array.isArray(keys.json) ? keys.json : (keys.json?.keys ?? []);
   if (list.some((k) => k.platform === 'custom' && sameUrl(k.baseUrl, OVH))) log('freellmapi: OVH anonymous endpoint already present');
@@ -95,11 +102,17 @@ async function freellmapi() {
 async function omniroute() {
   const envFile = opt('env-file'); const keyOut = opt('key-out');
   if (!envFile || !keyOut) die('--env-file and --key-out are required');
-  const pw = readKv(envFile).INITIAL_PASSWORD;
-  if (!pw) die('INITIAL_PASSWORD not found in the OmniRoute env file');
-  const lg = await http('POST', '/api/auth/login', { body: { password: pw } });
-  const cookie = (lg.headers.getSetCookie?.() ?? []).map((c) => c.split(';')[0]).join('; ');
-  if (lg.status >= 300 || !cookie) die(`OmniRoute login failed (HTTP ${lg.status}); the admin password may have been changed in the dashboard`);
+  const candidates = [process.env.OMNIROUTE_ADMIN_PASSWORD, readKv(envFile).INITIAL_PASSWORD].filter(Boolean);
+  if (!candidates.length) die('no OmniRoute admin password available (INITIAL_PASSWORD missing from the env file)');
+  let cookie = ''; let lastStatus = 0;
+  for (const pw of candidates) {
+    const lg = await http('POST', '/api/auth/login', { body: { password: pw } });
+    lastStatus = lg.status;
+    cookie = (lg.headers.getSetCookie?.() ?? []).map((c) => c.split(';')[0]).join('; ');
+    if (lg.status < 300 && cookie) break;
+    cookie = '';
+  }
+  if (!cookie) die(`OmniRoute login failed (HTTP ${lastStatus}): the admin password was probably changed in the dashboard. Nothing was changed. Run again with OMNIROUTE_ADMIN_PASSWORD=<your current password> in the environment.`);
   const nodesOf = async () => (await http('GET', '/api/provider-nodes', { cookie })).json?.nodes ?? [];
   let node = (await nodesOf()).find((n) => n.prefix === 'ovhanon');
   if (node) log('omniroute: node ovhanon already present');
