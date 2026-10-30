@@ -14,6 +14,7 @@ distinct_ports() { local out="" p; while [ "$(wc -w <<<"$out")" -lt 4 ]; do p="$
 read -r FREELLMAPI_PORT OMNIROUTE_PORT GUARD_PORT_FREELLMAPI GUARD_PORT_OMNIROUTE <<<"$(distinct_ports)"
 export FREELLMAPI_PORT OMNIROUTE_PORT GUARD_PORT_FREELLMAPI GUARD_PORT_OMNIROUTE
 P_ALL="$FREELLMAPI_PORT $OMNIROUTE_PORT $GUARD_PORT_FREELLMAPI $GUARD_PORT_OMNIROUTE"
+export FREE_AUDIT_INTERVAL=15   # fast watcher cycle for the test (default 60 s)
 T="$ROOT/termux"; C="$GW_HOME/config"
 cleanup() {
   bash "$T/gateways.sh" stop >/dev/null 2>&1
@@ -50,9 +51,41 @@ ck "OmniRoute gateway: api key 200, bad key 401"          bash -c "[ \"\$(curl -
 ck "FreeLLMAPI guard: guard key lists gpt-oss-20b"        bash -c "curl -s -m15 -H 'Authorization: Bearer $FK' http://127.0.0.1:$GUARD_PORT_FREELLMAPI/v1/models | grep -q '\"gpt-oss-20b\"'"
 ck "OmniRoute guard: guard key can list models (HTTP 200); custom-node models are called by name, OmniRoute does not list them" bash -c "[ \"\$(curl -s -m15 -o /dev/null -w '%{http_code}' -H 'Authorization: Bearer $OK' http://127.0.0.1:$GUARD_PORT_OMNIROUTE/v1/models)\" = 200 ]"
 ck "guards: no key -> 401 (both)"                         bash -c "[ \"\$(curl -s -m10 -o /dev/null -w '%{http_code}' -X POST -H 'content-type: application/json' -d '{}' http://127.0.0.1:$GUARD_PORT_FREELLMAPI/v1/chat/completions)\" = 401 ] && [ \"\$(curl -s -m10 -o /dev/null -w '%{http_code}' -X POST -H 'content-type: application/json' -d '{}' http://127.0.0.1:$GUARD_PORT_OMNIROUTE/v1/chat/completions)\" = 401 ]"
-ck "paid models refused by both guards (HTTP 403)"        bash -c "[ \"\$(curl -s -m10 -o /dev/null -w '%{http_code}' -X POST -H 'Authorization: Bearer $FK' -H 'content-type: application/json' -d '{\"model\":\"gpt-4o\",\"messages\":[{\"role\":\"user\",\"content\":\"x\"}]}' http://127.0.0.1:$GUARD_PORT_FREELLMAPI/v1/chat/completions)\" = 403 ] && [ \"\$(curl -s -m10 -o /dev/null -w '%{http_code}' -X POST -H 'Authorization: Bearer $OK' -H 'content-type: application/json' -d '{\"model\":\"openai/gpt-4o\",\"messages\":[{\"role\":\"user\",\"content\":\"x\"}]}' http://127.0.0.1:$GUARD_PORT_OMNIROUTE/v1/chat/completions)\" = 403 ]"
+ck "OmniRoute guard refuses a paid model (HTTP 403)"      bash -c "[ \"\$(curl -s -m10 -o /dev/null -w '%{http_code}' -X POST -H 'Authorization: Bearer $OK' -H 'content-type: application/json' -d '{\"model\":\"openai/gpt-4o\",\"messages\":[{\"role\":\"user\",\"content\":\"x\"}]}' http://127.0.0.1:$GUARD_PORT_OMNIROUTE/v1/chat/completions)\" = 403 ]"
+# FreeLLMAPI groups same-named models behind one id and answers unified names from its enabled (free) pool, so a paid NAME is refused (403)
+# or answered by the free route; what must never happen is an answer from another platform.
+ck "FreeLLMAPI guard: a paid model name is refused or answered only by the free OVH route" bash -c "
+  out=\$(curl -s -m60 -w '\n%{http_code}' -X POST -H 'Authorization: Bearer $FK' -H 'content-type: application/json' -d '{\"model\":\"gpt-4o\",\"max_tokens\":5,\"messages\":[{\"role\":\"user\",\"content\":\"x\"}]}' http://127.0.0.1:$GUARD_PORT_FREELLMAPI/v1/chat/completions)
+  code=\$(printf '%s' \"\$out\" | tail -n1); body=\$(printf '%s' \"\$out\" | sed '\$d'); echo \"HTTP \$code\"
+  [ \"\$code\" = 403 ] && exit 0
+  if [ \"\$code\" = 200 ]; then printf '%s' \"\$body\" | grep -q '\"platform\":\"custom\"' && exit 0; echo 'answered by a NON-free route'; exit 1; fi
+  exit 0"
 ck "fallback/routing body fields refused (OmniRoute guard)" bash -c "[ \"\$(curl -s -m10 -o /dev/null -w '%{http_code}' -X POST -H 'Authorization: Bearer $OK' -H 'content-type: application/json' -d '{\"model\":\"ovhanon/gpt-oss-120b\",\"models\":[\"openai/gpt-4o\"],\"messages\":[{\"role\":\"user\",\"content\":\"x\"}]}' http://127.0.0.1:$GUARD_PORT_OMNIROUTE/v1/chat/completions)\" = 403 ]"
-ck "free-only audit is clean (FreeLLMAPI + OmniRoute)"    bash -c ". '$C/freellmapi.admin'; export FREELLMAPI_ADMIN_EMAIL FREELLMAPI_ADMIN_PASSWORD; export OMNIROUTE_ADMIN_PASSWORD=\$(grep ^INITIAL_PASSWORD= '$C/omniroute.env' | cut -d= -f2-); node '$ROOT/tools/free-policy.mjs' freellmapi audit --base-url http://127.0.0.1:$FREELLMAPI_PORT && node '$ROOT/tools/free-policy.mjs' omniroute audit --base-url http://127.0.0.1:$OMNIROUTE_PORT"
+audit_env() { . "$C/freellmapi.admin"; export FREELLMAPI_ADMIN_EMAIL FREELLMAPI_ADMIN_PASSWORD; OMNIROUTE_ADMIN_PASSWORD="$(grep ^INITIAL_PASSWORD= "$C/omniroute.env" | cut -d= -f2-)"; export OMNIROUTE_ADMIN_PASSWORD; }
+audit_clean() { audit_env; node "$ROOT/tools/free-policy.mjs" freellmapi audit --base-url "http://127.0.0.1:$FREELLMAPI_PORT" && node "$ROOT/tools/free-policy.mjs" omniroute audit --base-url "http://127.0.0.1:$OMNIROUTE_PORT"; }
+# FreeLLMAPI re-syncs its catalog after every start (seen on CI: unverified platforms such as aihorde re-appear right after the install audit),
+# so "clean" is asserted after the watcher has had time to act, not at one instant.
+wait_clean() { local _; for _ in $(seq 1 30); do audit_clean >/dev/null 2>&1 && return 0; sleep 5; done; audit_clean; }
+ck "free-only audit becomes and stays clean (catalog drift is self-healed by the watcher)" wait_clean
+ck "the audit watcher is running"                         bash -c "bash '$T/gateways.sh' status 2>&1 | grep -q 'audit watcher: running'"
+# deterministic drift: enable a model that is NOT verified free, through the gateway's own API, and require the watcher to disable it again.
+drift_heals() {
+  audit_env
+  node --input-type=module -e '
+    const [base, lib] = process.argv.slice(1);
+    const { loadPolicy, classify } = await import(lib);
+    const policy = loadPolicy();
+    const j = async (m, p, t, b) => { const r = await fetch(base + p, { method: m, headers: { "content-type": "application/json", ...(t ? { authorization: "Bearer " + t } : {}) }, body: b ? JSON.stringify(b) : undefined }); return r.json().catch(() => ({})); };
+    const t = (await j("POST", "/api/auth/login", null, { email: process.env.FREELLMAPI_ADMIN_EMAIL, password: process.env.FREELLMAPI_ADMIN_PASSWORD })).token;
+    // a disabled model that the POLICY rejects: enabling it is a real violation
+    const m = (await j("GET", "/api/models", t)).find((x) => !x.enabled && x.platform !== "custom" && !classify(policy, "freellmapi", x.modelId).ok);
+    if (!m) { console.log("no disabled non-free model in this catalog to test with"); process.exit(3); }
+    await j("PATCH", "/api/models/" + m.id, t, { enabled: true });
+    if (!(await j("GET", "/api/models", t)).find((x) => x.id === m.id).enabled) { console.log("could not enable the test model"); process.exit(4); }
+    for (let i = 0; i < 24; i++) { await new Promise((r) => setTimeout(r, 5000)); const now = (await j("GET", "/api/models", t)).find((x) => x.id === m.id); if (!now.enabled) { console.log("watcher disabled the " + m.platform + " model again after ~" + (i + 1) * 5 + "s"); process.exit(0); } }
+    console.log("model " + m.platform + "/" + m.modelId + " is STILL enabled after 120 s"); process.exit(1);' "http://127.0.0.1:$FREELLMAPI_PORT" "file://$ROOT/tools/lib/free-policy.mjs"
+}
+ck "drift: a non-free model enabled behind our back is disabled again by the watcher" drift_heals
 ck "no gateway key or password leaked into logs/output"   bash -c "cd '$C'; for s in \$(head -n1 freellmapi.unified.key) \$(head -n1 omniroute.apikey) \$(grep ^FREELLMAPI_ADMIN_PASSWORD= freellmapi.admin | cut -d= -f2-) \$(grep ^INITIAL_PASSWORD= omniroute.env | cut -d= -f2-); do grep -rqF -- \"\$s\" '$TMP/b1.log' '$GW_HOME/logs' && { echo leak; exit 1; }; done; exit 0"
 ck "summary shows endpoints, models and dashboards"       bash -c "grep -q 'Endpoints' '$TMP/b1.log' && grep -q 'Dashboards' '$TMP/b1.log' && grep -q 'gpt-oss-20b' '$TMP/b1.log' && grep -q 'ovhanon/gpt-oss-120b' '$TMP/b1.log'"
 ck "provision refuses a non-loopback target"              bash -c "! node '$T/lib/provision.mjs' freellmapi --base http://example.com --cred-file '$TMP/c' --key-out '$TMP/k'"

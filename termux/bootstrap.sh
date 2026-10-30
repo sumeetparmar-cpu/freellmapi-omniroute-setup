@@ -43,10 +43,19 @@ FL_CKEY="$GW_CONFIG_DIR/guard-freellmapi.clientkey"; OR_CKEY="$GW_CONFIG_DIR/gua
 
 step "Packages"
 if [ "$PKGS" = 1 ] && is_termux && have pkg; then
-  info "installing git, curl, openssl, nodejs, python, build tools, util-linux (Termux pkg)"
-  pkg update -y >/dev/null 2>&1 || warn "pkg update failed (mirror problem?); continuing with what is installed. If installs fail: termux-change-repo"
-  pkg install -y git curl openssl nodejs python build-essential util-linux >/dev/null 2>&1 || stop_here "pkg install failed" "run  termux-change-repo  (pick a mirror), then  pkg update -y"
-  ok "packages ready (node $(node_version))"
+  # Install ONLY what is missing: a working node/curl/etc. is left exactly as it is (no upgrade, no reinstall).
+  want=()
+  have git || want+=(git); have curl || want+=(curl); have tar || want+=(tar); have node || want+=(nodejs)
+  { have python || have python3; } || want+=(python)
+  { have make && have clang; } || want+=(build-essential)   # native modules compile on the phone
+  have setsid || want+=(util-linux)                          # own process group per gateway (clean stop/restart)
+  if [ "${#want[@]}" -eq 0 ]; then ok "all required packages already present (nothing installed or upgraded)"
+  else
+    info "installing only the missing packages: ${want[*]}"
+    pkg update -y >/dev/null 2>&1 || warn "pkg update failed (mirror problem?); trying the install anyway. If it fails: termux-change-repo"
+    pkg install -y "${want[@]}" >/dev/null 2>&1 || stop_here "pkg install ${want[*]} failed" "run  termux-change-repo  (pick a mirror), then  pkg update -y"
+    ok "installed: ${want[*]}"
+  fi
 else info "skipped (not Termux, or --no-packages)"; fi
 have node && have git && have curl || stop_here "node, git and curl are required" "install them (Termux: pkg install nodejs git curl)"
 
@@ -93,6 +102,7 @@ step "Prune and audit: only verified-free models stay enabled"
 
 step "Start the guards"
 GD restart || stop_here "a guard did not start" "bash $HERE/gateways.sh logs guard-freellmapi   (or guard-omniroute)"
+GD watch start || stop_here "the audit watcher did not start" "bash $HERE/gateways.sh doctor"
 
 step "Genuine inference through both guards"
 if [ "$INFER" = 1 ]; then

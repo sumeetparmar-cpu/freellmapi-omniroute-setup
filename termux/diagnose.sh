@@ -12,11 +12,12 @@ up() { (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null; }
 http() { local c; c="$(curl -s -m 4 -o /dev/null -w '%{http_code}' "$1" 2>/dev/null)"; echo "${c:-000}"; }
 names() { [ -f "$1" ] && grep -E '^[A-Za-z_][A-Za-z0-9_]*=' "$1" | cut -d= -f1 | tr '\n' ' '; }
 val() { [ -f "$1" ] && grep -E "^$2=" "$1" | head -n1 | cut -d= -f2-; }   # only used for NON-secret settings (ports, paths)
+freemb() { local k; k="$(df -Pk "$HOME" 2>/dev/null | awk 'NR==2{print $4}')"; [ -n "$k" ] || k="$(df -k "$HOME" 2>/dev/null | awk 'END{print $(NF-2)}')"; [ -n "$k" ] || k="$(df -k "$HOME" 2>/dev/null | awk 'END{print $4}')"; case "$k" in ''|*[!0-9]*) echo unknown;; *) echo $((k / 1024));; esac; }
 FL_STATE=none; OR_STATE=none; FL_DIR=""; OR_DIR=""; NOTES=()
 
 hdr "PHONE"
 echo "  termux=${TERMUX_VERSION:-no} arch=$(uname -m) android=$(getprop ro.build.version.release 2>/dev/null || echo -)"
-echo "  ram total/available MB: $(awk '/MemTotal/{t=$2}/MemAvailable/{a=$2}END{printf "%d/%d",t/1024,a/1024}' /proc/meminfo 2>/dev/null)   free storage in HOME: $(df -Pm "$HOME" 2>/dev/null | awk 'NR==2{print $4}') MB"
+echo "  ram total/available MB: $(awk '/MemTotal/{t=$2}/MemAvailable/{a=$2}END{printf "%d/%d",t/1024,a/1024}' /proc/meminfo 2>/dev/null)   free storage in HOME: $(freemb) MB"
 for t in node npm git curl openssl python make clang setsid; do tool "$t"; done
 echo "  install location checked: $H"
 

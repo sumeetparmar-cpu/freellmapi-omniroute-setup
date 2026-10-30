@@ -4,6 +4,8 @@
 #   ./free-guard.sh setup <freellmapi|omniroute> [--key-file F] [--client-key-file F]   mint a client key (printed ONCE, or saved 0600 to --client-key-file) and store the gateway's API key (hidden prompt / --key-file)
 #   ./free-guard.sh start|stop|restart|status [freellmapi|omniroute]    (default: both)
 #   ./free-guard.sh audit                           FreeLLMAPI: prune non-free models (needs FREELLMAPI_ADMIN_TOKEN); OmniRoute: read-only check
+#   ./free-guard.sh watch start|stop|status         background re-audit (default every 60 s): FreeLLMAPI re-syncs its model catalog at every start and every 12 h and can
+#                                                   re-enable models that are not verified free; this disables them again (disable-only) and engages the kill switch meanwhile
 #   ./free-guard.sh logs <freellmapi|omniroute>
 #
 # Clients use the GUARD ports (FreeLLMAPI 3101, OmniRoute 20228) with the guard key; the gateway's own key stays in a 0600 file.
@@ -104,6 +106,45 @@ cmd_audit() {
   return $rc
 }
 
+# ---- watcher: the Termux equivalent of the VPS audit timer -------------------------------------------------------------------------------
+WATCH_INTERVAL="${FREE_AUDIT_INTERVAL:-60}"
+audit_cycle() { # one self-healing audit using the credential files this toolkit wrote; never prints a secret
+  (
+    # shellcheck disable=SC1091
+    [ -f "$GW_CONFIG_DIR/freellmapi.admin" ] && . "$GW_CONFIG_DIR/freellmapi.admin"
+    export FREELLMAPI_ADMIN_EMAIL="${FREELLMAPI_ADMIN_EMAIL:-}" FREELLMAPI_ADMIN_PASSWORD="${FREELLMAPI_ADMIN_PASSWORD:-}"
+    OMNIROUTE_ADMIN_PASSWORD="${OMNIROUTE_ADMIN_PASSWORD:-$(env_get "$GW_CONFIG_DIR/omniroute.env" INITIAL_PASSWORD 2>/dev/null)}"; export OMNIROUTE_ADMIN_PASSWORD
+    local rc=0
+    if [ -n "$FREELLMAPI_ADMIN_PASSWORD" ] && port_in_use "$FREELLMAPI_PORT"; then
+      node "$POLICY_JS" freellmapi audit --auto-fix --base-url "http://127.0.0.1:$FREELLMAPI_PORT" --flag-file "$(kill_file freellmapi)" || rc=1
+    fi
+    if [ -n "$OMNIROUTE_ADMIN_PASSWORD" ] && port_in_use "$OMNIROUTE_PORT"; then
+      node "$POLICY_JS" omniroute audit --base-url "http://127.0.0.1:$OMNIROUTE_PORT" --flag-file "$(kill_file omniroute)" || rc=1
+    fi
+    exit $rc
+  )
+}
+cmd_watch() {
+  local sub="${1:-}"
+  case "$sub" in
+    start)
+      need
+      if gw_running guard-watch; then ok "audit watcher already running (pid $(gw_pid guard-watch))"; return 0; fi
+      daemon_start guard-watch "$GW_LOG_DIR/free-guard-watch.log" bash "$HERE/free-guard.sh" watch loop
+      sleep 1
+      if gw_running guard-watch; then ok "audit watcher running (re-checks every ${WATCH_INTERVAL}s; disable-only; kill switch while a violation exists)"; else err "audit watcher did not start"; return 1; fi ;;
+    stop) gw_stop guard-watch ;;
+    status) if gw_running guard-watch; then info "audit watcher: running pid $(gw_pid guard-watch), every ${WATCH_INTERVAL}s"; else info "audit watcher: stopped"; fi ;;
+    loop) # internal: the daemon body
+      need
+      while :; do
+        if audit_cycle >>"$GW_LOG_DIR/free-guard-watch.log" 2>&1; then :; else printf '%s audit cycle reported a problem (see lines above)\n' "$(timestamp)" >>"$GW_LOG_DIR/free-guard-watch.log"; fi
+        sleep "$WATCH_INTERVAL"
+      done ;;
+    *) die "usage: watch start|stop|status" ;;
+  esac
+}
+
 ACT="${1:-}"; [ $# -gt 0 ] && shift
 case "$ACT" in
   setup) cmd_setup "$@" ;;
@@ -112,6 +153,7 @@ case "$ACT" in
   restart) need; each stop_one "${1:-}"; each start_one "${1:-}" ;;
   status) need; each status_one "${1:-}" ;;
   audit) cmd_audit ;;
+  watch) cmd_watch "$@" ;;
   logs) valid "${1:-}" || die "usage: logs <freellmapi|omniroute>"; tail -n 50 "$(gwlog "$1")" ;;
   *) usage; exit 2 ;;
 esac

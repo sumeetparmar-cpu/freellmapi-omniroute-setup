@@ -34,17 +34,18 @@ cmd_start() {
   FL start || rc=1
   OR start || rc=1
   GD start || rc=1
+  GD watch start || rc=1
   [ "$rc" -eq 0 ] && ok "all four processes are up" || err "something failed to start: run  $0 doctor"
   return $rc
 }
-cmd_stop() { GD stop || true; OR stop || true; FL stop || true; }
+cmd_stop() { GD watch stop || true; GD stop || true; OR stop || true; FL stop || true; }
 
 cmd_status() {
   local fl or
   fl="$(http_code "http://127.0.0.1:$FREELLMAPI_PORT/api/ping")"; or="$(http_code "http://127.0.0.1:$OMNIROUTE_PORT/api/health/ping")"
   info "FreeLLMAPI  $(gw_running freellmapi && echo "running pid $(gw_pid freellmapi)" || echo stopped)   health HTTP $fl   127.0.0.1:$FREELLMAPI_PORT"
   info "OmniRoute   $(gw_running omniroute && echo "running pid $(gw_pid omniroute)" || echo stopped)   health HTTP $or   127.0.0.1:$OMNIROUTE_PORT"
-  GD status
+  GD status; GD watch status
 }
 
 run_test() { # run_test NAME PORT KEYFILE MODEL
@@ -100,6 +101,7 @@ cmd_doctor() {
     [ -e "$GW_STATE_DIR/free-audit-$n.flag" ] && problem "free-only KILL SWITCH is engaged for $n (a policy violation was found; inference is refused)" "FREELLMAPI_ADMIN_EMAIL/PASSWORD from $GW_CONFIG_DIR/freellmapi.admin, then  ./termux/free-guard.sh audit"
     [ -s "$GW_CONFIG_DIR/guard-$n.clientkey" ] || problem "no guard key for $n" "re-run termux/bootstrap.sh"
   done
+  if gw_running guard-watch; then ok "free-only audit watcher running"; else problem "the free-only audit watcher is not running (catalog drift would go unnoticed)" "$0 start"; fi
   local free_mb; free_mb=$(df -Pm "$HOME" 2>/dev/null | awk 'NR==2{print $4}')
   [ -n "${free_mb:-}" ] && [ "$free_mb" -lt 500 ] && problem "only ${free_mb} MB of storage left" "free some space (backups: $GW_BACKUP_DIR)"
   if is_termux && ! have termux-wake-lock; then warn "termux-api not installed: Android may suspend the servers when the screen is off (pkg install termux-api)"; fi

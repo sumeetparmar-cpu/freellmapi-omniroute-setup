@@ -14,13 +14,17 @@ pkg update -y && pkg install -y git gh && { gh auth status >/dev/null 2>&1 || gh
 The **one** thing you do by hand: this repository is private, so `gh auth login` shows a one-time code and a web address. Open the address in the phone's browser, enter the code, approve, return to Termux (press Enter at any prompt). Nothing else needs typing or editing. (The branch is the PR branch; it is not merged into `main` yet.)
 
 ## What the command does (all idempotent: safe to run again)
-1. Installs packages (git, curl, openssl, nodejs, python, build tools, util-linux) and audits the phone (RAM, storage, Node version): stops with a plain message on a blocker.
+1. Installs **only the packages that are missing** (git, python and the build tools on a typical fresh Termux; an existing node/curl is left untouched, nothing is upgraded) and audits the phone (RAM, storage, Node version): stops with a plain message on a blocker.
 2. Installs the **tested versions** only if missing: FreeLLMAPI v0.16.12 and OmniRoute 3.8.52 (first time: several minutes, ~3 GB of storage). Existing installs, configs and data are reused as they are (not updated, not edited, not deleted).
 3. Starts both and configures the **keyless OVH anonymous route** through each gateway's own API: the FreeLLMAPI custom endpoint, and the OmniRoute node `ovhanon` plus one active keyless connection. No account, no API key, no billing.
 4. Generates the credentials (owner login, gateway keys, guard keys), all in `~/llm-gateways/config/` with mode 600. Nothing is printed except your two **guard keys** in the final summary.
 5. Prunes and audits: FreeLLMAPI keeps only verified-free models enabled (disable-only, never deletes); OmniRoute is checked for any provider outside the policy. A violation stops the script before anything is exposed.
-6. Starts the **free-only guards** and makes **real requests through both** (HTTP 200, non-empty text, token usage required; a health check does not count).
+6. Starts the **free-only guards** and an **audit watcher**, then makes **real requests through both** (HTTP 200, non-empty text, token usage required; a health check does not count).
 7. Prints the endpoints, models and dashboard addresses.
+
+**Why a watcher:** FreeLLMAPI re-syncs its model catalog from the internet at every start and every 12 hours, and that can switch on models nobody verified (seen on CI: community providers such as `aihorde` re-appearing minutes after the install audit). The watcher (`gateways.sh` starts it; every 60 s) re-audits, disables anything not verified free (disable-only, never deletes) and keeps the kill switch engaged while a violation exists. On a VPS the same job is a systemd timer.
+
+**Model names on FreeLLMAPI:** it groups same-named models behind one id and answers unified names such as `gpt-4o` or `claude-opus-4-5` from whatever is enabled. Since only free models are ever enabled and no paid provider is configured, such a request is answered by the free OVH model (or refused), never by a paid one; ask for `gpt-oss-20b` if you care which model answers. OmniRoute is strict: anything not on the free list gets HTTP 403.
 
 ## Where things are (all `127.0.0.1`, i.e. only apps on this phone; no public port is opened)
 | | Address | Model |
