@@ -38,4 +38,18 @@ tu "audit credential file is optional (-) and outside the unit" bash -c "grep -q
 t "status runs read-only"               bash -c "$FI status"
 t "same ports are refused"              bash -c "! GUARD_PORT_FREELLMAPI=4000 GUARD_PORT_OMNIROUTE=4000 $FI units"
 t "unknown step is a usage error"       bash -c "! $FI bogus"
+# --- safety rails (need rendered units, so only when we are root)
+if [ "$RENDERED" = 1 ]; then
+  rm -f "$U"/*; bash -c "$FI --apply units --client-keys" >/dev/null 2>&1
+  t "re-running units WITHOUT --client-keys over a hardened unit is refused" bash -c "! $FI --apply units 2>&1 && grep -q -- '--client-keys-file' $U/llm-guard-omniroute.service"
+  t "...and the hardened unit is left untouched"                            bash -c "grep -q -- '--client-keys-file' $U/llm-guard-freellmapi.service"
+  t "--allow-downgrade is the explicit escape hatch"                         bash -c "$FI --apply units --allow-downgrade && ! grep -q -- '--client-keys-file' $U/llm-guard-omniroute.service"
+  rm -f "$U"/*; bash -c "$FI --apply units --client-keys" >/dev/null 2>&1
+  t "enable (dry-run) warns when the key files are missing"                  bash -c "$FI enable omniroute 2>&1 | grep -q 'would refuse to start'"
+  t "enable --apply refuses (no crash-loop) when the key files are missing"  bash -c "! $FI --apply enable omniroute 2>&1 && ! systemctl is-active --quiet llm-guard-omniroute.service 2>/dev/null"
+  mkdir -p "$LLM_ROOT/omniroute/config"; printf 'h\n' > "$LLM_ROOT/omniroute/config/free-guard.clients"; printf 'k\n' > "$LLM_ROOT/omniroute/config/free-guard.upstream.key"
+  t "enable (dry-run) is quiet once the files exist"                         bash -c "! $FI enable omniroute 2>&1 | grep -q 'would refuse'"
+else
+  echo "SKIP safety-rail checks (need rendered units)"; SKIPPED=$((SKIPPED+1))
+fi
 echo "free-install: $PASS passed, $FAIL failed, $SKIPPED skipped"; [ "$FAIL" = 0 ]

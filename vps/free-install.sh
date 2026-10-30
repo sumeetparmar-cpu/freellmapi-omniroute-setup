@@ -3,13 +3,14 @@
 #
 #   free-install.sh [--apply] <step> [gateway] [options]
 #
-#   units  [--catalog-audited] [--client-keys]   render + systemd-analyze verify + install llm-guard-<gw>.service, llm-free-audit-<gw>.service/.timer
+#   units  [--catalog-audited] [--client-keys] [--allow-downgrade]   render + systemd-analyze verify + install llm-guard-<gw>.service, llm-free-audit-<gw>.service/.timer
 #                                for both gateways (NOT enabled, NOT started). --catalog-audited only after
 #                                'free-policy.mjs freellmapi apply' (see docs/FREE-ONLY.md).
 #   enable <freellmapi|omniroute>  enable --now the guard and the audit timer, then check the guard answers on its port
 #   status                         read-only summary
 #   remove <freellmapi|omniroute>  stop + disable ONLY that gateway's guard/audit units and delete those unit files
 #
+# Re-running 'units' without --client-keys over a unit that already enforces them is REFUSED unless --allow-downgrade is given.
 # --client-keys: clients must present a guard key (mint with tools/free-guard.mjs --new-client-key) and the gateway key lives in
 #   <gw>/config/free-guard.upstream.key (0600, service user); both files must exist before 'enable'.
 # Ports: guard listens on 127.0.0.1:$GUARD_PORT_FREELLMAPI (3101) / $GUARD_PORT_OMNIROUTE (20228); they must be free.
@@ -19,10 +20,10 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/vps-common.sh
 . "$HERE/lib/vps-common.sh"
 
-ARGS=(); EXTRA=""; CLIENTKEYS=0
+ARGS=(); EXTRA=""; CLIENTKEYS=0; DOWNGRADE=0
 STEP="${1:-}"; [ "$STEP" = "--apply" ] && { APPLY=1; shift; STEP="${1:-}"; }
 [ $# -gt 0 ] && shift
-while [ $# -gt 0 ]; do case "$1" in --catalog-audited) EXTRA=" --catalog-audited";; --client-keys) CLIENTKEYS=1;; --apply) APPLY=1;; *) ARGS+=("$1");; esac; shift; done
+while [ $# -gt 0 ]; do case "$1" in --catalog-audited) EXTRA=" --catalog-audited";; --client-keys) CLIENTKEYS=1;; --allow-downgrade) DOWNGRADE=1;; --apply) APPLY=1;; *) ARGS+=("$1");; esac; shift; done
 [ "$APPLY" = 1 ] && { is_root || die "--apply needs root"; assert_safe_root; }
 
 GUARD_PORT_FREELLMAPI="${GUARD_PORT_FREELLMAPI:-3101}"; GUARD_PORT_OMNIROUTE="${GUARD_PORT_OMNIROUTE:-20228}"
@@ -56,6 +57,10 @@ step_units() {
         else err "$f failed systemd-analyze verify:"; cat "$td/err" >&2; rm -rf "$td"; die "refusing to install an invalid unit"; fi
       done
     else warn "systemd-analyze not available: units not verified"; fi
+    if [ -f "$SYSTEMD_DIR/$(guard_unit "$gw")" ] && grep -q -- '--client-keys-file' "$SYSTEMD_DIR/$(guard_unit "$gw")" && ! grep -q -- '--client-keys-file' "$td/$(guard_unit "$gw")"; then
+      if [ "$DOWNGRADE" = 1 ]; then warn "$gw: dropping client-key enforcement (--allow-downgrade given)"
+      else rm -rf "$td"; die "$gw: the installed guard unit enforces client keys; re-run with --client-keys (or --allow-downgrade to remove the protection on purpose)"; fi
+    fi
     write_file "$SYSTEMD_DIR/$(guard_unit "$gw")" 0644 root:root "installs the free-guard unit for $gw (not enabled, not started)" < "$td/$(guard_unit "$gw")"
     write_file "$SYSTEMD_DIR/$(audit_unit "$gw")" 0644 root:root "installs the audit service for $gw (not enabled)" < "$td/$(audit_unit "$gw")"
     write_file "$SYSTEMD_DIR/llm-free-audit-$gw.timer" 0644 root:root "installs the 10-minute audit timer for $gw (not enabled)" < "$td/llm-free-audit-$gw.timer"
@@ -66,8 +71,15 @@ step_units() {
 
 step_enable() {
   local gw="${ARGS[0]:-}"; valid "$gw" || die "usage: enable <freellmapi|omniroute>"
-  local gp; gp="$(guard_port "$gw")"
-  [ -f "$SYSTEMD_DIR/$(guard_unit "$gw")" ] || [ "$APPLY" != 1 ] || die "run 'units' first"
+  local gp uf f missing=""
+  gp="$(guard_port "$gw")"; uf="$SYSTEMD_DIR/$(guard_unit "$gw")"
+  [ -f "$uf" ] || [ "$APPLY" != 1 ] || die "run 'units' first"
+  if [ -f "$uf" ]; then   # files the unit points at must exist and be non-empty, or the guard would crash-loop and trip StartLimitBurst
+    for f in $(grep -oE -- '--(client-keys|upstream-key)-file [^ ]+' "$uf" | awk '{print $2}'); do [ -s "$f" ] || missing="$missing $f"; done
+    if [ -n "$missing" ]; then
+      if [ "$APPLY" = 1 ]; then die "$gw: required guard file(s) missing or empty:$missing (see docs/VPS-DEPLOYMENT.md Stage I)"; else warn "$gw: would refuse to start, required file(s) missing or empty:$missing"; fi
+    fi
+  fi
   if port_listening "$gp" && ! { [ -d "$SYSTEMD_RUN_DIR" ] && systemctl is-active --quiet "$(guard_unit "$gw")"; }; then die "guard port $gp is in use by another process"; fi
   act "starts the $gw guard on 127.0.0.1:$gp (runs as $(gw_user "$gw"), 192 MB cap)" systemctl enable --now "$(guard_unit "$gw")"
   act "starts the 10-minute audit timer for $gw" systemctl enable --now "llm-free-audit-$gw.timer"

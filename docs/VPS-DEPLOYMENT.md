@@ -108,6 +108,7 @@ runuser -u llmomni -- sh -c 'umask 077; cat > /srv/llm/omniroute/config/free-gua
 ```
 Repeat for `freellmapi` (guard port 3101). For FreeLLMAPI run `tools/free-policy.mjs freellmapi apply` first and use `--catalog-audited` (see FREE-ONLY.md). Clients then call the **guard** port with their guard key;
 the gateway ports stay loopback-only and unused by clients. The audit reads an optional `config/free-audit.env` (0600) that you create. Nothing in this stage touches the gateway units, Docker, Caddy, n8n, SUPPAR, EARNIX or databases.
+Safety rails: `enable` refuses to start a guard whose client-key/upstream-key files are missing or empty (it would crash-loop); re-running `units` *without* `--client-keys` over a unit that already enforces them is refused unless you pass `--allow-downgrade`.
 Undo: `./vps/free-install.sh --apply remove <gw>`.
 
 ### Not in this runbook (needs its own approval): exposing anything through Caddy
