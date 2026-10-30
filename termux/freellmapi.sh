@@ -4,7 +4,7 @@
 # Independent from OmniRoute: own dir, data, env file, PID, logs, port (default 3001).
 #
 #   ./freellmapi.sh install | start | stop | restart | status | health | test-model
-#                   backup | list-backups | restore <archive> | update | rollback | rebuild | quota-report | logs | uninstall
+#                   backup | list-backups | restore <archive> | update | rollback | rebuild | quota-report | run | logs | uninstall
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/common.sh
@@ -27,7 +27,7 @@ Key for test-model: env FREELLMAPI_KEY, --key-file, or hidden prompt. It is neve
 EOF
 }
 
-ASSUME_YES=0; KEY_FILE=""; MODEL="auto"; WITH_DATA=0; ARCHIVE=""; QR_ARGS=()
+ASSUME_YES=0; KEY_FILE=""; MODEL="auto"; WITH_DATA=0; ARCHIVE=""; BACKUP_LABEL=""; QR_ARGS=()
 ACTION="${1:-}"; [ $# -gt 0 ] && shift
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -38,6 +38,7 @@ while [ $# -gt 0 ]; do
     --base-url) BASE_URL="$2"; shift ;;
     --with-data) WITH_DATA=1 ;;
     --archive) ARCHIVE="$2"; shift ;;
+    --label) BACKUP_LABEL="$2"; shift ;;
     --json|--list-models) QR_ARGS+=("$1") ;;
     -h|--help) usage; exit 0 ;;
     *) ARCHIVE="$1" ;;   # positional: restore <archive>
@@ -123,6 +124,13 @@ cmd_start() {
   else err "did not become healthy; last log lines:"; tail -n 20 "$LOG" >&2 || true; return 1; fi
   if is_termux && have termux-wake-lock; then info "tip: run termux-wake-lock so Android doesn't suspend the server"; fi
   return 0
+}
+# Foreground entry point for a service manager (systemd): no PID file, no daemonizing; exec so signals reach node.
+cmd_run() {
+  [ -d "$SRC/server/dist" ] || die "not built; run: $0 install"
+  assert_distinct_ports; check_node_unchanged
+  load_env_file "$ENVF"; cd "$SRC"
+  exec node server/dist/index.js
 }
 cmd_stop()   { gw_stop $NAME $PORT; }
 cmd_restart(){ cmd_stop; cmd_start; }
@@ -220,8 +228,8 @@ cmd_uninstall() {
 case "$ACTION" in
   install) cmd_install ;; start) cmd_start ;; stop) cmd_stop ;; restart) cmd_restart ;;
   status) cmd_status ;; health) cmd_health ;; test-model) cmd_test_model ;;
-  backup) cmd_backup ;; list-backups) cmd_list_backups ;; restore) cmd_restore ;;
-  update) cmd_update ;; rollback) cmd_rollback ;; rebuild) cmd_rebuild ;; quota-report) cmd_quota_report ;; logs) cmd_logs ;; uninstall) cmd_uninstall ;;
+  backup) cmd_backup "${BACKUP_LABEL:-manual}" ;; list-backups) cmd_list_backups ;; restore) cmd_restore ;;
+  update) cmd_update ;; rollback) cmd_rollback ;; rebuild) cmd_rebuild ;; quota-report) cmd_quota_report ;; run) cmd_run ;; logs) cmd_logs ;; uninstall) cmd_uninstall ;;
   ''|help|-h|--help) usage ;;
   *) usage; exit 2 ;;
 esac

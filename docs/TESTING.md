@@ -13,7 +13,7 @@ npm 10.9.4 / 11.6.1, PowerShell 7.5.0 (Linux build), ShellCheck. Upstream versio
 |---|---|---|
 | ShellCheck (`-S warning`) on all `.sh` | `shellcheck -x -S warning termux/*.sh termux/lib/common.sh tests/termux/*.sh scripts/*.sh` | clean |
 | PowerShell parser on all `.ps1` | `[Parser]::ParseFile(...)` | 0 errors |
-| Termux scripts | `bash tests/termux/run-tests.sh` | **87 passed, 0 failed** |
+| Termux scripts | `bash tests/termux/run-tests.sh` | **89 passed, 0 failed** |
 | `quota-report` reporter (Node 24 and Node 22.22.0) | `node --test tests/quota/quota-report.test.mjs` | **22 passed, 0 failed** (also run inside the bash suite) |
 | Secret scanner | `bash tests/termux/test-check-secrets.sh` | **11 passed, 0 failed** |
 | PowerShell scripts (pwsh 7.5 on Linux) | `pwsh -File tests/windows/run-tests.ps1` | **75 passed, 0 failed** |
@@ -107,3 +107,21 @@ no real provider was ever connected, so provider-reported quota has only been ex
 Findings from that run, now handled: OmniRoute withholds month-to-date usage from access-token callers (reported Unknown; the rolling
 30-day analytics are used instead); the unauthenticated health endpoint omits the version (not printed); `scrub()` was mis-called with a
 length argument (fixed); PowerShell treated redirected stdin as interactive (new `Test-Interactive`); a startup race in the port test.
+
+## VPS toolkit (`vps/`)
+
+Tested on a disposable Linux sandbox (Ubuntu 24.04 container, no systemd running, root). **Not run on a real VPS, not on Ubuntu 26.04.**
+
+| Suite | Command | Result |
+|---|---|---|
+| Part A: no privileges (library, preflight, inventory/integrity, unit templates, deploy gates and dry-run, backup pruning, monitor, gwctl safety, static safety scan) | `bash tests/vps/run-tests.sh` | **96 passed, 0 failed** |
+| Part A + B: **real** users, directories, units, isolation, verify.sh, gwctl update/rollback with fake toolkit | `sudo LLM_TEST_ALLOW_SYSTEM_CHANGES=1 bash tests/vps/run-tests.sh` | **131 passed, 0 failed** |
+| End-to-end rehearsal: real pinned Node download (SHA-256 checked), both gateways installed as separate users, started, health-checked, verified, `put-key`, `test-model` (through the real FreeLLMAPI to a local mock), `quota-report` on both, backup, scheduled backup, purge | `sudo LLM_TEST_ALLOW_SYSTEM_CHANGES=1 bash tests/vps/e2e-sandbox.sh` | **39 passed, 0 failed**; sandbox left with no users, dirs, processes |
+
+Part B and the rehearsal refuse to run without root **and** `LLM_TEST_ALLOW_SYSTEM_CHANGES=1`, because they create real accounts. They are meant for CI runners and sandboxes.
+
+What the real runs demonstrated (not just asserted): service users are system accounts with no login and no group but their own; each gateway's directory is unreadable by the other's user; the toolkit copy is not writable by either; a stray file, a privileged group, a non-loopback socket and a loopback socket on an unexpected port are each detected by `verify.sh`; the OmniRoute service ran on the pinned Node 24 (the system Node 22.22.0 would have been refused); secrets are generated server-side (0600) and never appear in the deploy log, `quota-report` output, or the process list; update with an unhealthy result rolls back automatically; `remove --purge` deletes only one gateway.
+
+Defects found by these tests and fixed: the preflight's "propose a free port" call passed the alternatives as one argument (proposed nothing); `act` did not abort when a step failed, so a failed checksum would not have stopped the install (now every failed step ends the run); `systemd-analyze verify` rejects a temp file without a `.service` suffix, which would have broken the `units` step; the static safety scan initially matched nothing at line start or inside `act "…" cmd` calls (caught by a planted-violation meta-test, now fixed).
+
+Not verifiable here: Ubuntu 26.04; real systemd start/stop/restart/cgroup limits/`KillMode` (units are checked with `systemd-analyze verify` and unit-tested only; the rehearsal used `LLM_NO_SYSTEMD=1`, and its preflight "no systemd" blocker was overridden on purpose because the container has none); behaviour next to real Docker/Caddy/n8n/SUPPAR/EARNIX (docker and systemctl are shims in Part A); the Hostinger environment (CPU, RAM, disk, existing ports); Windows and Android for anything in `vps/`.

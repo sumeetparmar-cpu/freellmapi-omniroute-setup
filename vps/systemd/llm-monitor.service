@@ -1,0 +1,15 @@
+# Read-only health/resource check. Exit 1 (WARN) / 2 (CRIT) makes the unit "failed", visible in `systemctl --failed`.
+[Unit]
+Description=Resource and health check for the LLM gateways
+
+[Service]
+Type=oneshot
+DynamicUser=yes
+StateDirectory=llm-monitor
+ExecStart=@LLM_ROOT@/toolkit/vps/monitor.sh check --log /var/lib/llm-monitor/monitor.log
+Nice=19
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes

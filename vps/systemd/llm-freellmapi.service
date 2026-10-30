@@ -1,0 +1,59 @@
+# FreeLLMAPI gateway: isolated user, loopback-only, resource-capped. Rendered by vps/deploy.sh (@...@ are placeholders).
+[Unit]
+Description=FreeLLMAPI gateway (isolated, 127.0.0.1:@PORT@)
+Documentation=file:@LLM_ROOT@/toolkit/README.md
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=@USER@
+Group=@USER@
+WorkingDirectory=@LLM_ROOT@/@GW@
+Environment=GW_HOME=@LLM_ROOT@/@GW@
+Environment=HOME=@LLM_ROOT@/@GW@/home
+Environment=PATH=@LLM_ROOT@/runtime/node/bin:/usr/bin:/bin
+Environment=NODE_OPTIONS=--max-old-space-size=512
+# Secrets are read from @LLM_ROOT@/@GW@/config/freellmapi.env by the toolkit itself (mode 0600); none appear in this unit.
+ExecStart=@LLM_ROOT@/toolkit/termux/freellmapi.sh run
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+KillMode=control-group
+UMask=0077
+
+# Resource isolation: existing services win under contention.
+MemoryHigh=768M
+MemoryMax=@MEM_MAX@
+CPUQuota=80%
+CPUWeight=50
+IOWeight=50
+Nice=10
+TasksMax=512
+LimitNOFILE=4096
+
+# Sandbox: can write only to its own directory; cannot gain privileges; no raw/netlink sockets.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=@LLM_ROOT@/@GW@
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

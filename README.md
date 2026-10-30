@@ -40,9 +40,10 @@ termux/   freellmapi.sh  omniroute.sh  audit-env.sh  lib/common.sh     # Android
 windows/  freellmapi.ps1 omniroute.ps1 audit-env.ps1 lib/Common.ps1    # Windows PowerShell 5.1 / 7+
 config/   gateways.env.example                                         # non-secret overrides (ports, pins)
 tools/    quota-report.mjs                                             # read-only usage/quota report (used by both platforms)
+vps/      preflight.sh inventory.sh deploy.sh verify.sh gwctl.sh monitor.sh backup-run.sh systemd/   # Ubuntu VPS deployment (isolated users, systemd)
 scripts/  check-secrets.sh                                             # pre-commit secret scan
 tests/    termux/ windows/ mock-openai-server.mjs                      # offline test suites
-docs/     PROVIDERS-AND-COSTS.md  ROLLBACK.md  QUOTA-REPORT.md  TESTING.md
+docs/     PROVIDERS-AND-COSTS.md  ROLLBACK.md  QUOTA-REPORT.md  VPS-DEPLOYMENT.md  TESTING.md
 ```
 
 State lives in `~/llm-gateways` (Termux) or `%USERPROFILE%\llm-gateways` (Windows); override with `GW_HOME`.
@@ -98,6 +99,13 @@ style: `-Yes -WithData -KeyFile -Model -Ref -Version -Archive`.
 FreeLLMAPI also ships a signed Windows `.exe` desktop installer (GitHub Releases). It is simpler but not
 scriptable and keeps data under `%APPDATA%\FreeLLMAPI`; these scripts install from source instead, so
 that backup, rollback and port control behave the same on both platforms. Do not run both flavours at once.
+
+## Linux VPS (Ubuntu) next to existing services
+
+`vps/` deploys both gateways as **separate unprivileged systemd services under `/srv/llm`**, loopback-only, resource-capped, with a read-only preflight and
+inventory so the existing server (Docker, Caddy, n8n, other apps) can be shown to be unchanged. Every changing step is a **dry run unless `--apply`**, and the
+first one is gated on a clean preflight report plus a pre-change inventory baseline. Start with `docs/VPS-DEPLOYMENT.md`; it lists every command and what it does.
+Not yet run on any real VPS: see its "Known limits".
 
 ## Daily commands
 

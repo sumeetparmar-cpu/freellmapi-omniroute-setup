@@ -14,13 +14,15 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: '24' }
       - name: shellcheck
-        run: shellcheck -x -S warning termux/*.sh termux/lib/common.sh tests/termux/*.sh scripts/*.sh
+        run: shellcheck -x -S warning termux/*.sh termux/lib/common.sh tests/termux/*.sh scripts/*.sh vps/*.sh vps/lib/*.sh tests/vps/*.sh
       - name: secret scan
         run: scripts/check-secrets.sh
       - name: Termux script tests (run on Linux)
         run: bash tests/termux/run-tests.sh && bash tests/termux/test-check-secrets.sh
       - name: PowerShell tests under pwsh on Linux
         run: pwsh -NoProfile -File tests/windows/run-tests.ps1
+      - name: VPS toolkit tests (unprivileged part)
+        run: bash tests/vps/run-tests.sh
 
   windows:
     runs-on: windows-latest
@@ -34,3 +36,23 @@ jobs:
       - name: PowerShell tests (PowerShell 7)
         shell: pwsh
         run: ./tests/windows/run-tests.ps1
+
+  # These two jobs make REAL system changes (test users, /srv/llm*); they run only on GitHub's disposable runner VMs and refuse to run elsewhere.
+  vps-privileged:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '24' }
+      - name: VPS toolkit tests incl. real users, isolation, units, verify, gwctl
+        run: sudo env PATH="$PATH" LLM_TEST_ALLOW_SYSTEM_CHANGES=1 bash tests/vps/run-tests.sh
+
+  vps-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '24' }
+      - name: End-to-end rehearsal (pinned Node download, both real installs, quota-report, backup, verify)
+        run: sudo env PATH="$PATH" LLM_TEST_ALLOW_SYSTEM_CHANGES=1 bash tests/vps/e2e-sandbox.sh

@@ -132,6 +132,7 @@ for g in freellmapi omniroute; do
   t  "$g help exits 0"                 bash "$ROOT/termux/$g.sh" help
   tn "$g unknown action exits non-zero" bash "$ROOT/termux/$g.sh" bogus
   tn "$g start before install refuses" bash "$ROOT/termux/$g.sh" start
+  tn "$g run (foreground, for systemd) before install refuses" bash "$ROOT/termux/$g.sh" run
   t  "$g status works when not installed" bash "$ROOT/termux/$g.sh" status
   tn "$g health fails when down"       env FREELLMAPI_PORT=39001 OMNIROUTE_PORT=39002 bash "$ROOT/termux/$g.sh" health
   tn "$g test-model without key (non-interactive) fails" env -u FREELLMAPI_KEY -u OMNIROUTE_KEY bash "$ROOT/termux/$g.sh" test-model --model x < /dev/null

@@ -1,0 +1,10 @@
+[Unit]
+Description=Weekly backup of %i
+
+[Timer]
+OnCalendar=Sun *-*-* 03:30:00
+RandomizedDelaySec=15m
+Persistent=true
+
+[Install]
+WantedBy=timers.target

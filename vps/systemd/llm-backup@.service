@@ -1,0 +1,13 @@
+# Scheduled backup of one gateway (instance = gateway name). Briefly stops it for a consistent SQLite copy. Not enabled by default.
+[Unit]
+Description=Scheduled backup of %i (stop, back up, restart, prune old scheduled backups)
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=@LLM_ROOT@/toolkit/vps/backup-run.sh %i
+Nice=19
+IOSchedulingClass=idle
+TimeoutStartSec=900
+NoNewPrivileges=yes
+PrivateTmp=yes
