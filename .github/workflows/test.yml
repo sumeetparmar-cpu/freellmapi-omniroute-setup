@@ -110,3 +110,20 @@ jobs:
       - name: Journal of the gateway units (on failure)
         if: failure()
         run: sudo journalctl --no-pager -n 200 -u 'llm-freellmapi' -u 'llm-omniroute' || true
+
+  # The Termux one-command bootstrap, run for real on Linux: pinned installs, API provisioning of the keyless OVH route, guards, restart and
+  # crash recovery, idempotent re-run. This proves the scripts, NOT Android/Termux (Bionic libc, pkg, battery management): that needs a phone.
+  # Real OVH inference is not run here (shared runner IPs vs OVH's 2 requests/minute/model anonymous limit).
+  termux-bootstrap:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-26.04]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '24' }
+      - name: Bootstrap FreeLLMAPI + OmniRoute with guards (real installs)
+        run: LLM_TEST_BOOTSTRAP=1 bash tests/termux/bootstrap.test.sh

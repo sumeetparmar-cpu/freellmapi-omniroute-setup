@@ -1,56 +1,59 @@
-# Both gateways on your Android phone (Termux)
+# FreeLLMAPI + OmniRoute on your Android phone: one command
 
-**Status, stated plainly:** everything below is prepared and the scripts are tested on Linux, but it has **not been run on a phone or in Termux** (no access from the build environment). Expect to fix small Android-specific things; the first place to look is `./termux/audit-env.sh`.
-Resource warning: OmniRoute measured ~610 MB RAM and ~2.8 GB disk, FreeLLMAPI ~155 MB / 0.6 GB (on Linux). If the phone struggles, run one gateway at a time.
+**Honest status first.** The bootstrap below is tested for real on Linux (CI, Ubuntu 24.04 and 26.04: real installs, real guards, restart and crash recovery) and, once, with genuine OVH inference through both guards. It has **not been run on Android or in Termux**. Linux tests do not prove Android works; the list of what only a phone can prove is at the bottom. If something fails, the script stops with the exact next step, and running the same command again resumes.
 
-## 1. Termux and packages
-Install **Termux from F-Droid** (not the Play Store build). Then:
+## The command (paste into Termux, installed from **F-Droid**, not the Play Store)
+
 ```bash
-pkg update && pkg upgrade -y
-pkg install -y git curl openssl nodejs python build-essential gh termux-api   # `nodejs` (current), not nodejs-lts: OmniRoute needs >= 22.22.2
-termux-wake-lock                                                                # keep the servers alive with the screen off
-```
-Also exempt Termux from battery optimisation (Android settings).
-
-## 2. Get the code (the repo is private, so log in first)
-```bash
-gh auth login            # GitHub.com -> HTTPS -> "Login with a web browser"; the token stays in gh's store, not in git history
-gh repo clone sumeetparmar-cpu/freellmapi-omniroute-setup && cd freellmapi-omniroute-setup
-git checkout claude/network-access-connectivity-test-82ck5t   # this work is not merged into main yet
+pkg update -y && pkg install -y git gh && { gh auth status >/dev/null 2>&1 || gh auth login -h github.com -p https -w; } && gh auth setup-git && { [ -d ~/freellmapi-omniroute-setup/.git ] && git -C ~/freellmapi-omniroute-setup pull --ff-only || gh repo clone sumeetparmar-cpu/freellmapi-omniroute-setup ~/freellmapi-omniroute-setup -- -b claude/network-access-connectivity-test-82ck5t; } && bash ~/freellmapi-omniroute-setup/termux/bootstrap.sh
 ```
 
-## 3. Install and start both gateways (reuses nothing from the sandbox; fresh data on the phone)
-```bash
-./termux/audit-env.sh                      # read-only; fix every BLOCKER first
-./termux/freellmapi.sh install && ./termux/freellmapi.sh start
-./termux/omniroute.sh  install && ./termux/omniroute.sh  start
-./termux/freellmapi.sh health; ./termux/omniroute.sh health
-```
-Dashboards (open in the phone's browser): **http://127.0.0.1:3001** (FreeLLMAPI: create the first account) and **http://127.0.0.1:20128** (OmniRoute: `./termux/omniroute.sh credentials` prints the admin password; to see the dashboard set `OMNIROUTE_HEADLESS=0` in `~/llm-gateways/config/omniroute.env` and `./termux/omniroute.sh restart`).
+The **one** thing you do by hand: this repository is private, so `gh auth login` shows a one-time code and a web address. Open the address in the phone's browser, enter the code, approve, return to Termux (press Enter at any prompt). Nothing else needs typing or editing. (The branch is the PR branch; it is not merged into `main` yet.)
 
-## 4. Make them free-only (do this before using them)
-1. **FreeLLMAPI** dashboard → copy the unified API key. Add the OVH anonymous endpoint as a *custom endpoint*: base URL `https://oai.endpoints.kepler.ai.cloud.ovh.net/v1`, model `gpt-oss-20b`, **no API key** (see docs/FREE-ONLY.md).
-2. **OmniRoute** dashboard → Providers → *Add OpenAI-compatible node*: name `OVH anonymous`, **prefix `ovhanon`**, type `chat`, base URL as above; add a connection **without an API key** and make it active. Then create an API key under *Endpoints*.
-3. Prune and audit (disable-only), then start the guards:
-```bash
-export FREELLMAPI_ADMIN_TOKEN=...          # from the FreeLLMAPI dashboard
-export OMNIROUTE_ADMIN_PASSWORD=...        # from `omniroute.sh credentials`
-./termux/free-guard.sh audit               # FreeLLMAPI: non-free models disabled; OmniRoute: read-only check
-./termux/free-guard.sh setup freellmapi    # asks for the FreeLLMAPI key (hidden), prints YOUR guard key once
-./termux/free-guard.sh setup omniroute     # same for OmniRoute
-./termux/free-guard.sh start; ./termux/free-guard.sh status
-```
-**Use the guard ports from your apps:** FreeLLMAPI `http://127.0.0.1:3101/v1` (model `gpt-oss-20b`), OmniRoute `http://127.0.0.1:20228/v1` (model `ovhanon/gpt-oss-120b`), each with its own guard key. Not the raw ports 3001/20128, which list paid model names.
+## What the command does (all idempotent: safe to run again)
+1. Installs packages (git, curl, openssl, nodejs, python, build tools, util-linux) and audits the phone (RAM, storage, Node version): stops with a plain message on a blocker.
+2. Installs the **tested versions**: FreeLLMAPI v0.16.12 and OmniRoute 3.8.52 (first time: several minutes, ~3 GB of storage). Existing installs and data are reused, never overwritten.
+3. Starts both and configures the **keyless OVH anonymous route** through each gateway's own API: the FreeLLMAPI custom endpoint, and the OmniRoute node `ovhanon` plus one active keyless connection. No account, no API key, no billing.
+4. Generates the credentials (owner login, gateway keys, guard keys), all in `~/llm-gateways/config/` with mode 600. Nothing is printed except your two **guard keys** in the final summary.
+5. Prunes and audits: FreeLLMAPI keeps only verified-free models enabled (disable-only, never deletes); OmniRoute is checked for any provider outside the policy. A violation stops the script before anything is exposed.
+6. Starts the **free-only guards** and makes **real requests through both** (HTTP 200, non-empty text, token usage required; a health check does not count).
+7. Prints the endpoints, models and dashboard addresses.
 
-## 5. First real request (₹0: OVH anonymous tier, 2 requests/minute/model)
+## Where things are (all `127.0.0.1`, i.e. only apps on this phone; no public port is opened)
+| | Address | Model |
+|---|---|---|
+| **FreeLLMAPI API (use this)** | `http://127.0.0.1:3101/v1` | `gpt-oss-20b` |
+| **OmniRoute API (use this)** | `http://127.0.0.1:20228/v1` | `ovhanon/gpt-oss-120b` |
+| FreeLLMAPI dashboard | `http://127.0.0.1:3001` (login `owner@gateway.invalid`, password in `~/llm-gateways/config/freellmapi.admin`) | |
+| OmniRoute dashboard | `http://127.0.0.1:20128` (password: `bash ~/freellmapi-omniroute-setup/termux/omniroute.sh credentials`) | |
+
+Send the **guard key** (`bash ~/freellmapi-omniroute-setup/termux/gateways.sh keys`) as `Authorization: Bearer ...`. Never use ports 3001/20128 from apps: they list paid model names. Paid models get HTTP 403 from the guards; there is no fallback and no paid provider is configured. OmniRoute's `/models` list does not show the OVH model, so enter `ovhanon/gpt-oss-120b` by hand in apps that let you type a model name (apps that only offer a dropdown cannot select it). OVH's anonymous tier allows **2 requests per minute per model**; reasoning models need `max_tokens` of at least ~200 or the visible text can be empty.
+
+## Daily use, restart and recovery
 ```bash
-curl -s http://127.0.0.1:3101/v1/chat/completions -H "Authorization: Bearer $GUARD_KEY" -H 'content-type: application/json' \
-  -d '{"model":"gpt-oss-20b","max_tokens":200,"messages":[{"role":"user","content":"Reply with one word: pong"}]}'
+G=~/freellmapi-omniroute-setup/termux/gateways.sh
+bash $G status      # processes, health, kill switch
+bash $G start       # after a phone reboot, or if Android killed Termux (also takes a wake lock)
+bash $G restart
+bash $G test        # one real request through each guard
+bash $G doctor      # diagnoses and prints the exact fix for each problem
+bash $G logs freellmapi    # or: omniroute | guard-freellmapi | guard-omniroute
 ```
-(`max_tokens` needs room: these are reasoning models and short budgets can come back with empty text.)
+* **Something half-installed or failed:** run the one command again; it resumes and keeps your data.
+* **A gateway crashed or Android killed it:** `bash $G start` (the scripts ignore zombie and orphaned processes, and `restart` cleans both).
+* **Start at boot:** install the *Termux:Boot* app, then `bash ~/freellmapi-omniroute-setup/termux/bootstrap.sh --boot`.
+* **Backup / rollback:** `bash ~/freellmapi-omniroute-setup/termux/freellmapi.sh backup` (same for `omniroute.sh`); `list-backups`, `restore <file>`. Backups carry the guard's key hashes, never the gateway keys.
+* **Kill switch engaged** (doctor says so): a policy violation was found and inference is refused until the audit passes. Fix the named model/provider, then re-run the command.
+* Keep Android from suspending Termux: exempt it from battery optimisation (the script takes a wake lock but Android may still kill it).
+
+## What needs a real phone (NOT proven by any Linux/CI test)
+* Termux package names and versions (`nodejs` current, `python`, `build-essential`, `util-linux` for `setsid`).
+* **Native modules building on Android (Bionic libc, aarch64)**: the biggest risk. FreeLLMAPI tolerates a failed optional `better-sqlite3` build; OmniRoute's native dependencies are unverified on Android.
+* RAM and storage: OmniRoute measured ~610 MB RAM / 2.8 GB disk on Linux, FreeLLMAPI ~155 MB / 0.6 GB. Phone figures are unmeasured; if it struggles, run one gateway at a time.
+* `gh auth login` device flow inside Termux; `termux-wake-lock`; Termux:Boot; Android's background-process killing.
+* Install time on mobile data (downloads are retried with back-off if the connection drops).
+
+If any of these fails, send me the last screen of output and I will fix the script.
 
 ## Reaching it from other devices
-Everything binds to `127.0.0.1`, so only apps on the phone can reach it, on purpose. For your laptop or other devices later, use a private VPN (Tailscale) and keep key auth on; never port-forward to the internet.
-
-## Daily use
-`./termux/free-guard.sh status|stop|restart|logs <gw>`, `./termux/freellmapi.sh status|stop|restart|backup`, `./termux/omniroute.sh ...`. Backups include the guard's key hashes, not the gateway keys.
+Everything binds to `127.0.0.1` on purpose. For a laptop later use a private VPN (Tailscale) with key auth on; never port-forward.

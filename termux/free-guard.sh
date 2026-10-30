@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Free-only guard manager for Android/Termux (also works on generic Linux). Runs tools/free-guard.mjs in front of each gateway.
 #
-#   ./free-guard.sh setup <freellmapi|omniroute>   mint a client key (printed ONCE) and store the gateway's API key (hidden prompt / --key-file)
+#   ./free-guard.sh setup <freellmapi|omniroute> [--key-file F] [--client-key-file F]   mint a client key (printed ONCE, or saved 0600 to --client-key-file) and store the gateway's API key (hidden prompt / --key-file)
 #   ./free-guard.sh start|stop|restart|status [freellmapi|omniroute]    (default: both)
 #   ./free-guard.sh audit                           FreeLLMAPI: prune non-free models (needs FREELLMAPI_ADMIN_TOKEN); OmniRoute: read-only check
 #   ./free-guard.sh logs <freellmapi|omniroute>
@@ -37,15 +37,22 @@ need() {
 
 cmd_setup() {
   local gw="${1:-}"; valid "$gw" || die "usage: setup <freellmapi|omniroute> [--key-file F]"; shift
-  local kf=""; while [ $# -gt 0 ]; do case "$1" in --key-file) kf="${2:-}"; shift;; *) die "unknown option $1";; esac; shift; done
+  local kf="" ckf=""; while [ $# -gt 0 ]; do case "$1" in --key-file) kf="${2:-}"; shift;; --client-key-file) ckf="${2:-}"; shift;; *) die "unknown option $1";; esac; shift; done
   need
+  # Re-running with --client-key-file is a no-op when this guard already has both files (the client key cannot be shown again).
+  if [ -n "$ckf" ] && [ -s "$ckf" ] && [ -s "$(clients "$gw")" ] && [ -s "$(upkey "$gw")" ]; then ok "$gw guard already set up (client key in $ckf)"; return 0; fi
   local key; key="$(GW_KEY="${GW_KEY:-}" read_api_key GW_KEY "$kf")"
   ( umask 077; printf '%s\n' "$key" > "$(upkey "$gw")" ); chmod 600 "$(upkey "$gw")"
   unset key
   ok "stored the $gw gateway key in $(upkey "$gw") (mode 600, never printed)"
   local ck; ck="$(node "$GUARD_JS" --new-client-key "${GUARD_CLIENT_LABEL:-phone}" --client-keys-file "$(clients "$gw")")"
   chmod 600 "$(clients "$gw")"
-  printf '\nYour %s GUARD key (shown once; only its hash is stored; put it in your client app):\n  %s\n\n' "$gw" "$ck"
+  if [ -n "$ckf" ]; then
+    ( umask 077; printf '%s\n' "$ck" > "$ckf" ); chmod 600 "$ckf"
+    ok "guard client key for $gw saved to $ckf (mode 600); only its hash is kept by the guard"
+  else
+    printf '\nYour %s GUARD key (shown once; only its hash is stored; put it in your client app):\n  %s\n\n' "$gw" "$ck"
+  fi
   info "client base URL: http://127.0.0.1:$(gport "$gw")/v1"
 }
 
@@ -82,13 +89,19 @@ status_one() {
 
 cmd_audit() {
   need; [ -f "$POLICY_JS" ] || die "tools/free-policy.mjs not found"
+  local rc=0
+  # The "catalog audited" marker is only valid for the audit that just passed: drop it first, recreate it on success.
+  rm -f "$GW_STATE_DIR/freellmapi.catalog-audited"
   info "FreeLLMAPI: disabling every non-free model (disable-only; never enables or deletes)"
   if [ -n "${FREELLMAPI_ADMIN_TOKEN:-}${FREELLMAPI_ADMIN_PASSWORD:-}" ]; then
-    node "$POLICY_JS" freellmapi apply --base-url "http://127.0.0.1:$FREELLMAPI_PORT" --flag-file "$(kill_file freellmapi)" && : > "$GW_STATE_DIR/freellmapi.catalog-audited" && ok "catalog is free-only; restart the FreeLLMAPI guard to accept 'auto'"
-  else warn "set FREELLMAPI_ADMIN_TOKEN (or EMAIL+PASSWORD) to audit FreeLLMAPI"; fi
+    if node "$POLICY_JS" freellmapi apply --base-url "http://127.0.0.1:$FREELLMAPI_PORT" --flag-file "$(kill_file freellmapi)"; then
+      : > "$GW_STATE_DIR/freellmapi.catalog-audited"; ok "catalog is free-only; restart the FreeLLMAPI guard to accept 'auto'"
+    else err "FreeLLMAPI still has non-free models enabled (kill switch engaged)"; rc=1; fi
+  else warn "set FREELLMAPI_ADMIN_TOKEN (or EMAIL+PASSWORD) to audit FreeLLMAPI"; rc=1; fi
   if [ -n "${OMNIROUTE_MGMT_TOKEN:-}${OMNIROUTE_ADMIN_PASSWORD:-}" ]; then
-    node "$POLICY_JS" omniroute audit --base-url "http://127.0.0.1:$OMNIROUTE_PORT" --flag-file "$(kill_file omniroute)" || true
-  else warn "set OMNIROUTE_MGMT_TOKEN (or OMNIROUTE_ADMIN_PASSWORD) to audit OmniRoute"; fi
+    node "$POLICY_JS" omniroute audit --base-url "http://127.0.0.1:$OMNIROUTE_PORT" --flag-file "$(kill_file omniroute)" || { err "OmniRoute has a provider outside the free-only policy (kill switch engaged)"; rc=1; }
+  else warn "set OMNIROUTE_MGMT_TOKEN (or OMNIROUTE_ADMIN_PASSWORD) to audit OmniRoute"; rc=1; fi
+  return $rc
 }
 
 ACT="${1:-}"; [ $# -gt 0 ] && shift

@@ -76,7 +76,7 @@ write_env_if_missing() {
 build() {
   ( cd "$SRC"
     info "npm install (a failing optional better-sqlite3 build is harmless on Android)"
-    npm install --no-audit --no-fund
+    retry_cmd 3 npm install --no-audit --no-fund --fetch-retries=5 --fetch-retry-mintimeout=4000 --fetch-retry-maxtimeout=60000
     info "npm run build"
     npm run build )
   node_version > "$GW_STATE_DIR/freellmapi.node_version"

@@ -92,7 +92,8 @@ npm_install_omniroute() { # npm_install_omniroute VERSION
   npm_major="$(npm -v | cut -d. -f1)"
   # npm >= 11 blocks lifecycle scripts unless allowed (upstream README, Quick Start).
   [ "$npm_major" -ge 11 ] && args+=("--allow-scripts=$ALLOW_SCRIPTS")
-  npm "${args[@]}"
+  args+=(--fetch-retries=5 --fetch-retry-mintimeout=4000 --fetch-retry-maxtimeout=60000)
+  retry_cmd 3 npm "${args[@]}"
   node_version > "$GW_STATE_DIR/omniroute.node_version"
 }
 

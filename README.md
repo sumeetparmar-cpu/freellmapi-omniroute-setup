@@ -64,7 +64,7 @@ git clone <this repo> && cd freellmapi-omniroute-setup
 ./termux/freellmapi.sh health; ./termux/omniroute.sh health
 ```
 
-Step-by-step phone guide including the free-only guard: **docs/PHONE-TERMUX.md**.
+**One command, both gateways, free-only guards, real inference test: docs/PHONE-TERMUX.md** (Linux-tested; not yet run on a phone).
 
 Dashboards: `http://127.0.0.1:3001` (FreeLLMAPI: create the first account, add provider keys, copy the
 unified key) and `http://127.0.0.1:20128` (OmniRoute: `./termux/omniroute.sh credentials` prints the
