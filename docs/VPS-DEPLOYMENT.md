@@ -29,9 +29,11 @@ Replace `VPS` with your host. Use a fresh root shell; nothing here needs a reboo
 ```bash
 git clone https://github.com/sumeetparmar-cpu/freellmapi-omniroute-setup.git && cd freellmapi-omniroute-setup
 git checkout <commit that CI shows green>       # the commit hash is printed in the final report
-git archive --format=tar.gz --prefix=llm-toolkit/ HEAD -o llm-toolkit.tar.gz && sha256sum llm-toolkit.tar.gz   # note the hash
-scp llm-toolkit.tar.gz root@VPS:/root/
+scripts/make-release.sh --out release --verify    # deterministic archive + .sha256; --verify re-runs the suites from a clean extraction
+scp release/llm-toolkit-*.tar.gz release/llm-toolkit-*.tar.gz.sha256 root@VPS:/root/
+# the same commit always produces the same bytes, so the hash can be compared with the one printed in the pull request
 ```
+(The older manual form still works: `git archive --format=tar.gz --prefix=llm-toolkit/ HEAD -o llm-toolkit.tar.gz && sha256sum llm-toolkit.tar.gz`.) On the VPS, run `sha256sum -c llm-toolkit-*.tar.gz.sha256` before extracting.
 No private-repo credentials ever need to exist on the VPS.
 
 ### Stage B: READ-ONLY inspection (VPS)  [gate G1: you authorize reading]
@@ -93,6 +95,21 @@ ssh -L 13001:127.0.0.1:<freellmapi-port> -L 23128:127.0.0.1:<omniroute-port> roo
 `./vps/deploy.sh --apply timers` installs `llm-backup@.timer` (weekly, briefly stops the service) and `llm-monitor.timer` (every 5 min, read-only) **without enabling them**; review, then
 `systemctl enable --now llm-backup@freellmapi.timer llm-backup@omniroute.timer llm-monitor.timer`.
 
+### Stage I (recommended, after F/G): the free-only guard  [gate G8]
+Makes "₹0" an enforced property rather than a habit; read [FREE-ONLY.md](FREE-ONLY.md) first (it also lists the provider-account conditions no software can enforce).
+```bash
+./vps/free-install.sh units --client-keys            # DRY RUN: prints exactly which 6 unit files would be written
+./vps/free-install.sh --apply units --client-keys    # writes llm-guard-<gw>.service, llm-free-audit-<gw>.service/.timer into /etc/systemd/system (not enabled)
+# as the service user, create the two files the guard needs (client keys are shown once; the gateway key comes from the gateway dashboard):
+runuser -u llmomni -- /srv/llm/runtime/node/bin/node /srv/llm/toolkit/tools/free-guard.mjs --new-client-key laptop --client-keys-file /srv/llm/omniroute/config/free-guard.clients
+runuser -u llmomni -- sh -c 'umask 077; cat > /srv/llm/omniroute/config/free-guard.upstream.key'     # paste the gateway key, Ctrl-D
+./vps/free-install.sh --apply enable omniroute       # starts the guard on 127.0.0.1:20228 + the 10-minute audit timer; disables itself again if it does not answer
+./vps/free-install.sh status
+```
+Repeat for `freellmapi` (guard port 3101). For FreeLLMAPI run `tools/free-policy.mjs freellmapi apply` first and use `--catalog-audited` (see FREE-ONLY.md). Clients then call the **guard** port with their guard key;
+the gateway ports stay loopback-only and unused by clients. The audit reads an optional `config/free-audit.env` (0600) that you create. Nothing in this stage touches the gateway units, Docker, Caddy, n8n, SUPPAR, EARNIX or databases.
+Undo: `./vps/free-install.sh --apply remove <gw>`.
+
 ### Not in this runbook (needs its own approval): exposing anything through Caddy
 Phase 1 is tunnel-only. If you later want a public API hostname: a new site block in a separate included file, authentication in front, only `/v1/*`, `caddy validate` before any
 reload (a bad reload can affect your existing sites). Services in Docker's bridge network cannot reach `127.0.0.1` of the host; how SUPPAR/EARNIX/n8n would call the gateways is an open question.
@@ -112,6 +129,7 @@ reload (a bad reload can affect your existing sites). Services in Docker's bridg
 | F | `systemctl enable --now llm-<gw>.service` | starts that service now and at boot |
 | G | `gwctl … put-key` | writes one 0600 file under that gateway's `config/` |
 | H | install timer units; `systemctl enable --now …timer` | scheduled backup/monitor (opt-in) |
+| I | `free-install.sh --apply units/enable` | writes 3 unit files per gateway under `/etc/systemd/system`; starts only that gateway's guard + audit timer; touches no existing unit |
 | later | `gwctl <gw> update/rollback/restore/backup`; `backup-run.sh` | stop → act → start, only on that gateway's own code/data; scheduled backups pruned by name |
 | undo | `deploy.sh --apply remove <gw>` [`--purge --yes-delete-data`] | stop/disable/remove that unit; purge deletes only `/srv/llm/<gw>` and its user |
 
@@ -130,10 +148,10 @@ Backups contain encryption keys and encrypted provider credentials: export them 
 
 ## Resource budget (heuristics, not measurements on your VPS)
 FreeLLMAPI: `MemoryMax=1G` (heap 512 MB). OmniRoute: `MemoryMax=2G` (`OMNIROUTE_MEMORY_MB=1024`; ~0.6 GB RSS was seen idle in the sandbox). `CPUQuota=80%`, `CPUWeight=50`, `Nice=10`, `IOWeight=50`:
-under contention your existing services win. Override per unit with `MEM_MAX=3G ./vps/deploy.sh --apply units`. Disk: ~0.6 GB + up to ~2.7 GB measured, plus backups. `monitor.sh check` warns at < 8 GB free.
+under contention your existing services win. Override per unit with `MEM_MAX=3G ./vps/deploy.sh --apply units`. Measured 2026-10-30 in the sandbox: FreeLLMAPI 0.58 GB disk / ~155 MB RSS; OmniRoute 2.8 GB disk / ~610 MB RSS (wrapper + server); each free-guard ~61 MB RSS (unit cap 192 MB). Disk: ~0.6 GB + up to ~2.8 GB, plus backups. `monitor.sh check` warns at < 8 GB free.
 
 ## Known limits, stated plainly
-* **Ubuntu 26.04 has not been tested** (sandbox: 24.04). The preflight decides on functional checks (glibc, systemd ≥ 245, cgroup v2, tools, ports, resources) and warns on any other OS version.
+* **Ubuntu 26.04 has not been tested** (sandbox: 24.04; no 26.04 image is available here). Static review found no removed commands and only long-standing systemd directives, and the preflight is exercised against a 26.04 `os-release` fixture, but nothing has been *run* on 26.04. The preflight decides on functional checks (glibc, systemd ≥ 245, cgroup v2, tools, ports, resources) and warns on any other OS version.
 * **The systemd start path has not been run.** Unit files are verified by `systemd-analyze verify` and their directives are unit-tested; start/stop/restart/restart-on-failure under real systemd, cgroup limits, and `KillMode` behaviour are untested. The sandbox rehearsal started services with the toolkit's own process control (`LLM_NO_SYSTEMD=1`, test only).
 * Free provider tiers are not guaranteed: nothing here depends on a quota, and `quota-report` prints Unknown wherever a source exposes nothing.
 * Your existing services' ports, data locations and Docker setup are unknown to me; the preflight and inventory are how they get checked, on the VPS, read-only.

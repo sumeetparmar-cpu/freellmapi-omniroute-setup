@@ -132,13 +132,18 @@ Environment: Ubuntu 24.04 container, Node 24.22.2 (from the npm registry), FreeL
 
 | What | Command | Result |
 |---|---|---|
-| Guard + policy CLI against loopback mocks (policy, params, routes, rate limit, cooldown, daily cap, restart recovery, kill switch, audit/apply, secret canary) | `node --test tests/guard/*.test.mjs` | **22 passed, 0 failed** |
-| VPS unit rendering (dry-run default, 6 units, loopback, users, sandboxing, no secrets, port clash) | `bash tests/vps/free-install.test.sh` | **16 passed, 0 failed** |
+| Guard + policy CLI against loopback mocks (policy, params, routes, rate limit, cooldown, daily cap, restart recovery, kill switch, audit/apply, custom nodes, secret canary) | `node --test tests/guard/*.test.mjs` | **36 passed, 0 failed** |
+| Adversarial bypass suite, asserting what the UPSTREAM received (40 bad model strings, 28 route/path tricks, header stripping, Host rebinding, smuggling, content types, client keys, in-flight cap, crash/restart quota) | included above (`tests/guard/security.test.mjs`) | **12 passed** |
+| VPS unit rendering (dry-run default, 6 units, loopback, users, client keys, sandboxing, no secrets, port clash) | `bash tests/vps/free-install.test.sh` | **17 passed, 0 failed** |
+| Privileged VPS suite in this disposable container (real throw-away users, dirs, units, update + rollback, purge) | `sudo LLM_TEST_ALLOW_SYSTEM_CHANGES=1 bash tests/vps/run-tests.sh` | **132 passed, 0 failed**; no users/dirs left behind |
+| Release archive verified from a clean extraction with the pinned Node 24.11.0 | `scripts/make-release.sh --verify` | all suites pass; checksum verified |
+| `systemd-analyze verify` + `security --offline` on the new units (with stand-in binaries) | local | verify passes; exposure 2.9 OK (existing gateway unit: 3.0) |
 | ShellCheck over all shell scripts | as CI | clean |
 | `free-policy freellmapi apply` on a real fresh FreeLLMAPI | live | 97 enabled models -> **43**, 0 violations (54 non-free disabled, nothing enabled/deleted) |
 | **Real inference**: guard -> FreeLLMAPI -> OVH anonymous tier (`gpt-oss-20b`, `max_tokens=16`, 1 request, ₹0) | live, through the session proxy | genuine completion with token usage (not a mock) |
 | Live negatives through the same stack: `gpt-4o`, Cloudflare `kimi-k2.6`, OpenRouter `owl-alpha`, `models[]` fallback, `web_search` tool, `/v1/images`, `/api/keys` | live | all 403 from the guard; the OVH request counter stayed at 1 |
-| OmniRoute path: guard -> real OmniRoute with a real OmniRoute API key | live | allowed model refused by OmniRoute itself (`provider_not_configured`, no inference); `auto`/paid/combo blocked by the guard |
+| OmniRoute path, keyless: client -> guard (client key) -> OmniRoute 3.8.52 -> OVH anonymous via a custom node (`ovhanon`), connection with NO api key | live | **genuine completion ("pong") with provider token usage**; `ovhanon/gpt-4o`, unknown prefixes, paid models and `auto` blocked |
+| Audit of a suspicious OmniRoute custom node | live | flagged, kill flag set; removed -> flag cleared |
+| Direct-access bypass: gateway key through the guard / guard key against each gateway | live | both 401 |
 
-**Not tested (blocked):** real inference through OmniRoute (its `ovhcloud` connector requires an API key, and OVH keys need a payment method; no keys for the other five providers were supplied),
-real inference for Groq/Gemini/Mistral/OpenRouter/Cloudflare through either gateway (no keys), and anything on the VPS (not accessed from this environment). `systemd-analyze verify` could only check unit syntax here (no deployed `/srv/llm`).
+**Not tested (blocked):** real inference for Groq/Gemini/Mistral/OpenRouter/Cloudflare through either gateway (no keys supplied), **Ubuntu 26.04** (no image available; static review + `os-release` fixture only), the full `e2e-sandbox.sh` rehearsal (it downloads Node from nodejs.org, which this environment's network policy blocks; the pinned-Node path was instead exercised by running the suites under Node 24.11.0), systemd *start* of the units (no running systemd here), and anything on the VPS (not accessed). `systemd-analyze verify` could only check unit syntax here (no deployed `/srv/llm`).
