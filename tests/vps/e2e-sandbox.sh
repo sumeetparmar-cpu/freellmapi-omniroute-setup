@@ -11,7 +11,10 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 [ "$(id -u)" = 0 ] && [ "${LLM_TEST_ALLOW_SYSTEM_CHANGES:-}" = 1 ] || { echo "refusing: needs root and LLM_TEST_ALLOW_SYSTEM_CHANGES=1 (creates real users/directories)"; exit 2; }
 TMP="$(mktemp -d)"; E="/srv/llme2e-$$"; UF=llme2efree; UO=llme2eomni; PF=${E2E_PORT_FL:-18701}; PO=${E2E_PORT_OM:-18702}; PM=${E2E_PORT_MOCK:-18703}
 export LLM_ROOT="$E" LLM_USER_FREELLMAPI=$UF LLM_USER_OMNIROUTE=$UO SYSTEMD_DIR="$TMP/units" SYSTEMD_RUN_DIR=/nonexistent LLM_NO_SYSTEMD=1
-mkdir -p "$TMP/units"; PASS=0; FAIL=0; MOCK=""
+mkdir -p "$TMP/units"
+# Run from a directory the service users cannot enter (like /root/llm-deploy on a real server): they must not inherit it as cwd.
+cd "$TMP" || exit 2
+PASS=0; FAIL=0; MOCK=""
 ck() { local n="$1"; shift; if "$@" >"$TMP/o" 2>&1; then PASS=$((PASS+1)); echo "ok   - $n"; else FAIL=$((FAIL+1)); echo "FAIL - $n"; tail -8 "$TMP/o" | sed 's/^/       /'; fi; }
 cleanup() {
   echo "# cleanup"

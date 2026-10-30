@@ -276,6 +276,7 @@ for g in freellmapi omniroute; do
 #!/bin/sh
 # fake gateway manager: records calls, "update" can be made to break health via the marker file
 echo "$@" >> "$GW_HOME/calls.log"
+pwd > "$GW_HOME/cwd.log"
 case "$1" in
   update) [ -f "$GW_HOME/fail-update" ] && exit 1; touch "$GW_HOME/updated"; exit 0 ;;
   rollback) rm -f "$GW_HOME/updated"; touch "$GW_HOME/rolled-back"; rm -f "$GW_HOME/break-health"; exit 0 ;;
@@ -290,6 +291,7 @@ FAKE
 done
 GCB=(env PATH="$BIN:$PATH" LLM_ROOT="$B_ROOT" LLM_USER_FREELLMAPI="$UF" LLM_USER_OMNIROUTE="$UO" SYSTEMD_RUN_DIR=/nonexistent/x LLM_NO_SYSTEMD=1 GWCTL_HEALTH_WAIT=3 "$ROOT/vps/gwctl.sh")
 node "$ROOT/tests/quota/mock-gateways.mjs" freellmapi ok 18601 >/dev/null 2>&1 & PIDS+=("$!"); sleep 1
+t  "service-user commands start in the gateway's own dir, not the caller's (0700) cwd" bash -c "cd '$TMP' && ${GCB[*]} freellmapi status >/dev/null 2>&1; [ \"\$(cat $B_ROOT/freellmapi/cwd.log)\" = '$B_ROOT/freellmapi' ]"
 t  "gwctl backup stops/starts around the toolkit call"  bash -c "runuser -u $UF -- touch $B_ROOT/freellmapi/up; ${GCB[*]} freellmapi backup && [ -f $B_ROOT/freellmapi/backed-up ] && [ -f $B_ROOT/freellmapi/up ] && grep -q '^stop\$' $B_ROOT/freellmapi/calls.log && grep -q '^start\$' $B_ROOT/freellmapi/calls.log"
 t  "gwctl update with healthy result keeps the update"  bash -c "${GCB[*]} freellmapi update && [ -f $B_ROOT/freellmapi/updated ] && [ ! -f $B_ROOT/freellmapi/rolled-back ]"
 rm -f "$B_ROOT"/freellmapi/updated

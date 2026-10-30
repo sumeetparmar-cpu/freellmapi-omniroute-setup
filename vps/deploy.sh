@@ -62,7 +62,7 @@ gw_port() { case "$1" in freellmapi) read_conf PORT_FREELLMAPI;; omniroute) read
 ping_path() { case "$1" in freellmapi) echo /api/ping;; omniroute) echo /api/health/ping;; esac; }
 as_user() { # as_user GW cmd... : run as the gateway's service user with a scrubbed environment
   local gw="$1"; shift; local u h pt=(); u="$(gw_user "$gw")"; h="$(gw_home "$gw")"; mapfile -t pt < <(passthrough_env)
-  runuser -u "$u" -- env -i HOME="$h/home" PATH="$LLM_ROOT/runtime/node/bin:/usr/bin:/bin" GW_HOME="$h" LANG=C.UTF-8 TERM=dumb "${pt[@]}" "$@"
+  runuser -u "$u" -- env -i -C "$h" HOME="$h/home" PATH="$LLM_ROOT/runtime/node/bin:/usr/bin:/bin" GW_HOME="$h" LANG=C.UTF-8 TERM=dumb "${pt[@]}" "$@"
 }
 
 # ---- steps -----------------------------------------------------------------------------------------
@@ -156,7 +156,7 @@ step_install() {
   local pre=() pt=(); have nice && pre+=(nice -n 19); have ionice && pre+=(ionice -c3); mapfile -t pt < <(passthrough_env)
   local sd=(); [ -d "$SYSTEMD_RUN_DIR" ] && have systemd-run && sd=(systemd-run --quiet --scope -p "MemoryMax=${INSTALL_MEM_MAX:-2G}" -p CPUWeight=20 --)
   act "as $u: git clone/npm install/build (FreeLLMAPI) or npm install --prefix (OmniRoute) into $h only; generates this gateway's secrets into $h/config/$gw.env (0600); heavy CPU/RAM, so niced and memory-capped" \
-    "${sd[@]}" runuser -u "$u" -- env -i HOME="$h/home" PATH="$LLM_ROOT/runtime/node/bin:/usr/bin:/bin" GW_HOME="$h" LANG=C.UTF-8 TERM=dumb "${pt[@]}" "${pre[@]}" "$TOOLKIT_DIR/termux/$gw.sh" install
+    "${sd[@]}" runuser -u "$u" -- env -i -C "$h" HOME="$h/home" PATH="$LLM_ROOT/runtime/node/bin:/usr/bin:/bin" GW_HOME="$h" LANG=C.UTF-8 TERM=dumb "${pt[@]}" "${pre[@]}" "$TOOLKIT_DIR/termux/$gw.sh" install
 }
 render_unit() { # render_unit GW -> unit text on stdout
   local gw="$1" tpl port; tpl="$HERE/systemd/llm-$gw.service"; port="$(gw_port "$gw")"; [ -n "$port" ] || port="@PORT@"

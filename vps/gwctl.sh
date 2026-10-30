@@ -21,9 +21,9 @@ case "$GW" in freellmapi) PING=/api/ping; DEFKEY="$HOME_/config/client.key"; KEY
 use_systemd() { [ -d "$SYSTEMD_RUN_DIR" ] && [ -z "${LLM_NO_SYSTEMD:-}" ]; }
 as_svc() { # run a command as the service user (or directly when already that user), scrubbed environment (+ opt-in LLM_PASSTHROUGH_ENV)
   local pt=(); mapfile -t pt < <(passthrough_env)
-  if [ "$(id -un)" = "$USER_" ]; then env -i HOME="$HOME_/home" PATH="$LLM_ROOT/runtime/node/bin:/usr/bin:/bin" GW_HOME="$HOME_" LANG=C.UTF-8 TERM=dumb "${pt[@]}" "$@"
+  if [ "$(id -un)" = "$USER_" ]; then env -i -C "$HOME_" HOME="$HOME_/home" PATH="$LLM_ROOT/runtime/node/bin:/usr/bin:/bin" GW_HOME="$HOME_" LANG=C.UTF-8 TERM=dumb "${pt[@]}" "$@"
   else is_root || die "run as root (sudo) or as $USER_"
-       runuser -u "$USER_" -- env -i HOME="$HOME_/home" PATH="$LLM_ROOT/runtime/node/bin:/usr/bin:/bin" GW_HOME="$HOME_" LANG=C.UTF-8 TERM=dumb "${pt[@]}" "$@"; fi
+       runuser -u "$USER_" -- env -i -C "$HOME_" HOME="$HOME_/home" PATH="$LLM_ROOT/runtime/node/bin:/usr/bin:/bin" GW_HOME="$HOME_" LANG=C.UTF-8 TERM=dumb "${pt[@]}" "$@"; fi
 }
 is_active() { if use_systemd; then systemctl is-active --quiet "$UNIT"; else as_svc "$SCRIPT" status 2>&1 | grep -q "running"; fi; }
 svc() { # svc start|stop|restart
