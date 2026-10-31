@@ -12,8 +12,8 @@ ck "config refuses to run without guard keys"          bash -c "rm -f '$GW_HOME/
 ck "config writes the file and the launcher"           bash -c "bash '$S' config && [ -f '$CFG' ] && [ -x '$GW_HOME/bin/opencode-free' ]"
 ck "config file is mode 600"                           bash -c "[ \"\$(stat -c %a '$CFG')\" = 600 ]"
 ck "config check passes"                               bash "$S" check
-ck "no guard key is inside the config or the launcher" bash -c "! grep -qF -e '$KEY1' -e '$KEY2' '$CFG' '$GW_HOME/bin/opencode-free'"
-ck "the launcher reads the keys from their files"      bash -c "grep -q 'guard-freellmapi.clientkey' '$GW_HOME/bin/opencode-free' && grep -q 'guard-omniroute.clientkey' '$GW_HOME/bin/opencode-free'"
+ck "no guard key is inside the config, launcher or inner script" bash -c "! grep -qF -e '$KEY1' -e '$KEY2' '$CFG' '$GW_HOME/bin/opencode-free' '$GW_HOME/opencode/inner.sh'"
+ck "the inner script reads the keys from their files"  bash -c "grep -q 'guard-freellmapi.clientkey' '$GW_HOME/opencode/inner.sh' && grep -q 'guard-omniroute.clientkey' '$GW_HOME/opencode/inner.sh'"
 ck "only freellmapi + omniroute are enabled providers" bash -c "node -e 'const c=JSON.parse(require(\"fs\").readFileSync(process.argv[1]));process.exit(JSON.stringify(c.enabled_providers.sort())===JSON.stringify([\"freellmapi\",\"omniroute\"])?0:1)' '$CFG'"
 ck "small_model (background chores) is ours"           bash -c "node -e 'const c=JSON.parse(require(\"fs\").readFileSync(process.argv[1]));process.exit(/^freellmapi\\//.test(c.small_model)?0:1)' '$CFG'"
 ck "re-running config changes nothing and makes no backup" bash -c "bash '$S' config >/dev/null && ! ls '$CFG'.bak-* >/dev/null 2>&1"

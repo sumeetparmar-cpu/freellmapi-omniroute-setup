@@ -1,6 +1,6 @@
 # OpenCode on the phone, through the two free-only gateways
 
-**Status, stated plainly.** Prepared and Linux-tested: the config generator + checker (16 checks, mutation-tested), the launcher, and the capability check of the two guarded gateways (`gateways.sh compat`, real requests). **NOT done and NOT claimed: OpenCode is not installed anywhere yet, and nothing here proves it runs on Android.** The install route is unknown until your phone answers `opencode-setup.sh probe`.
+**Status, stated plainly.** Prepared and Linux-tested: the config generator + checker (16 checks, mutation-tested), the launcher, and the capability check of the two guarded gateways (`gateways.sh compat`, real requests). **NOT claimed: that OpenCode runs on your phone.** The install method is established (section 5) but only your phone can show which of the two glibc routes works.
 
 ## 1. Where Claude/Anthropic inference is still used (audit, 2026-10-31)
 | Component | Uses Claude? | Evidence / how to stop |
@@ -31,18 +31,18 @@ OVH's anonymous tier allows **2 requests per minute per model per IP**. A coding
 ## 4. Pricing note (correction)
 OVH's public model list now shows per-token prices (for example gpt-oss-120b $0.00000009 input / $0.00000047 output). Earlier notes said "all priced 0": that no longer matches. Those prices apply to **authenticated** use (OVH docs: authenticated = 400 requests/minute per PCI project). The anonymous tier sends **no key and no account**, so there is nothing to bill, but the gateways cannot report a cost, so "₹0" is inferred from that, not measured. Never create an OVH API key for these gateways.
 
-## 5. Install OpenCode on the phone (YOU run; I do not claim success until I see your output)
-Step 1, read-only probe (installs nothing; send me the output):
-```
-cd ~/freellmapi-omniroute-setup && git pull --ff-only && bash termux/opencode-setup.sh probe
-```
-Candidate routes, **unverified until the probe answers** (the npm package ships only Linux glibc/musl binaries, and Termux's Node reports its platform as `android`, so a plain `npm i -g opencode-ai` is expected to fail):
-* a Termux package, if `pkg search opencode` lists one;
-* otherwise OpenCode inside a Linux userland (`proot-distro` with Debian), where the arm64 Linux binary can run and `127.0.0.1` is shared with the phone.
-Do not install anything from this list until I have your probe output.
+## 5. Install OpenCode on the phone
+**Established (from OpenCode's own published files and your phone's probe):** the official `npm i -g opencode-ai` cannot work on Termux. Its installer maps only `darwin/linux/win32`; Termux's Node reports `android`, so it would look for `opencode-android-arm64`, which does not exist (registry: HTTP 404), and the real binaries are marked Linux-only so npm skips them. The binary itself is an ELF aarch64 glibc executable (interpreter `/lib/ld-linux-aarch64.so.1`, needs only libc/libm/libpthread/libdl, nothing newer than glibc 2.17); Android's own libc cannot run it. Your phone has no Termux `opencode` package, no `proot-distro` and no system glibc.
 
-Step 2 (after OpenCode is installed): `bash termux/opencode-setup.sh config && bash termux/opencode-setup.sh check`, then run `~/llm-gateways/bin/opencode-free` instead of `opencode`.
-Step 3: `bash termux/opencode-accept.sh` (untested): a real coding task through each gateway (the test result is checked by `node --test`, not by the model), an independent review by the other gateway, and a refused-provider check.
+**So the installer supplies glibc:** it downloads the binary straight from the npm registry and verifies its sha512 against the registry (a tampered file, a wrong-architecture binary or a non-https source is refused: tested), then tries Termux's `glibc-runner`, and if that does not work Debian under `proot-distro`. A method counts only if it really runs `opencode --version`. Which one works on your phone is **not known until you run it**; the Linux tests prove the logic, not Android.
+
+```
+cd ~/freellmapi-omniroute-setup && git pull --ff-only && bash termux/opencode-install.sh
+```
+It never touches the gateways or their data, is safe to re-run, and if neither method works it says so and marks nothing as installed.
+
+Then run OpenCode with `~/llm-gateways/bin/opencode-free` (it reads the guard keys from their mode-600 files; no key is on any command line or in any file it writes). Config: only `freellmapi` and `omniroute` are enabled providers, the background model is ours, sharing and auto-update are off; `bash termux/opencode-setup.sh check` re-verifies that at any time.
+End-to-end acceptance (real coding tasks through each gateway, independent review by the other, refused-provider check): `bash termux/opencode-accept.sh` (untested until you run it; budget 10-20 minutes because of OVH's 2 requests/minute).
 
 ## 6. Usage tracking
 `bash termux/gateways.sh usage` shows, per guard, requests allowed/blocked today and counts by provider (read from the guard, not from the model's own claims).

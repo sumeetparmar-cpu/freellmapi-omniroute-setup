@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ACCEPTANCE RUN for OpenCode on THIS phone, through the two free-only guards. UNTESTED until you run it (OpenCode is not installed in the cloud).
-# Needs: OpenCode installed, `termux/opencode-setup.sh config` done, gateways running. Uses a throw-away project; touches nothing else.
+# Needs: `termux/opencode-install.sh` done (installs OpenCode and writes the config + launcher), gateways running. Uses a throw-away project; touches nothing else.
 # Expect it to be SLOW: OVH's anonymous tier allows 2 requests/minute/model and an agent makes several requests per task (budget ~10-20 minutes).
 #   ./opencode-accept.sh
 set -uo pipefail
@@ -11,7 +11,7 @@ LAUNCH="$GW_HOME/bin/opencode-free"
 FLP="${GUARD_PORT_FREELLMAPI:-3101}"; ORP="${GUARD_PORT_OMNIROUTE:-20228}"
 PASS=0; FAIL=0
 ck() { local n="$1"; shift; if "$@" >"$T/out" 2>&1; then PASS=$((PASS + 1)); echo "PASS  $n"; else FAIL=$((FAIL + 1)); echo "FAIL  $n"; sed 's/^/        /' "$T/out" | tail -8; fi; }
-have opencode || die "OpenCode is not installed yet (run: bash $HERE/opencode-setup.sh probe, and send me the output)"
+[ -f "$GW_HOME/opencode/runner" ] || die "OpenCode is not installed yet: run  bash $HERE/opencode-install.sh"
 [ -x "$LAUNCH" ] || die "run first: bash $HERE/opencode-setup.sh config"
 bash "$HERE/opencode-setup.sh" check || die "config check failed"
 T="$(mktemp -d)"; trap 'rm -rf "$T"' EXIT
