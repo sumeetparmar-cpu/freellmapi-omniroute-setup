@@ -77,13 +77,23 @@ drift_heals() {
     const policy = loadPolicy();
     const j = async (m, p, t, b) => { const r = await fetch(base + p, { method: m, headers: { "content-type": "application/json", ...(t ? { authorization: "Bearer " + t } : {}) }, body: b ? JSON.stringify(b) : undefined }); return r.json().catch(() => ({})); };
     const t = (await j("POST", "/api/auth/login", null, { email: process.env.FREELLMAPI_ADMIN_EMAIL, password: process.env.FREELLMAPI_ADMIN_PASSWORD })).token;
-    // a disabled model that the POLICY rejects: enabling it is a real violation
-    const m = (await j("GET", "/api/models", t)).find((x) => !x.enabled && x.platform !== "custom" && !classify(policy, "freellmapi", x.modelId).ok);
-    if (!m) { console.log("no disabled non-free model in this catalog to test with"); process.exit(3); }
-    await j("PATCH", "/api/models/" + m.id, t, { enabled: true });
-    if (!(await j("GET", "/api/models", t)).find((x) => x.id === m.id).enabled) { console.log("could not enable the test model"); process.exit(4); }
-    for (let i = 0; i < 24; i++) { await new Promise((r) => setTimeout(r, 5000)); const now = (await j("GET", "/api/models", t)).find((x) => x.id === m.id); if (!now.enabled) { console.log("watcher disabled the " + m.platform + " model again after ~" + (i + 1) * 5 + "s"); process.exit(0); } }
-    console.log("model " + m.platform + "/" + m.modelId + " is STILL enabled after 120 s"); process.exit(1);' "http://127.0.0.1:$FREELLMAPI_PORT" "file://$ROOT/tools/lib/free-policy.mjs"
+    // Disabled models that the POLICY rejects: enabling one is a real violation. the catalog sync of FreeLLMAPI itself can delete a row while we poll, which
+    // proves nothing about the watcher, so that case retries with another model (up to 4) instead of passing or crashing.
+    const cands = (await j("GET", "/api/models", t)).filter((x) => !x.enabled && x.platform !== "custom" && !classify(policy, "freellmapi", x.modelId).ok);
+    if (!cands.length) { console.log("no disabled non-free model in this catalog to test with"); process.exit(3); }
+    for (const m of cands.slice(0, 4)) {
+      await j("PATCH", "/api/models/" + m.id, t, { enabled: true });
+      const first = (await j("GET", "/api/models", t)).find((x) => x.id === m.id);
+      if (!first || !first.enabled) { console.log("could not enable " + m.platform + " test model (row changed), trying another"); continue; }
+      for (let i = 0; i < 24; i++) {
+        await new Promise((r) => setTimeout(r, 5000));
+        const now = (await j("GET", "/api/models", t)).find((x) => x.id === m.id);
+        if (!now) { console.log("row disappeared (catalog sync), not evidence: trying another model"); break; }
+        if (!now.enabled) { console.log("watcher disabled the " + m.platform + " model again after ~" + (i + 1) * 5 + "s"); process.exit(0); }
+        if (i === 23) { console.log("model " + m.platform + "/" + m.modelId + " is STILL enabled after 120 s"); process.exit(1); }
+      }
+    }
+    console.log("no usable test model after 4 tries"); process.exit(1);' "http://127.0.0.1:$FREELLMAPI_PORT" "file://$ROOT/tools/lib/free-policy.mjs"
 }
 ck "drift: a non-free model enabled behind our back is disabled again by the watcher" drift_heals
 ck "no gateway key or password leaked into logs/output"   bash -c "cd '$C'; for s in \$(head -n1 freellmapi.unified.key) \$(head -n1 omniroute.apikey) \$(grep ^FREELLMAPI_ADMIN_PASSWORD= freellmapi.admin | cut -d= -f2-) \$(grep ^INITIAL_PASSWORD= omniroute.env | cut -d= -f2-); do grep -rqF -- \"\$s\" '$TMP/b1.log' '$GW_HOME/logs' && { echo leak; exit 1; }; done; exit 0"
