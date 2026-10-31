@@ -40,7 +40,7 @@ cmd_config() {
       $schema: "https://opencode.ai/config.json",
       // Only these two providers exist for OpenCode: no Anthropic, no OpenCode Zen, nothing that could bill or silently fall back.
       enabled_providers: ["freellmapi", "omniroute"],
-      model: `freellmapi/${e.FLM}`,
+      model: `omniroute/${e.ORM}`,   // the larger model: it fixed the acceptance bug, the 20B did not
       small_model: `freellmapi/${e.FLM}`,   // background chores (titles, summaries) must not use a default model of some other provider
       share: "disabled", autoupdate: false,
       permission: { edit: "ask", bash: "ask", webfetch: "ask" },

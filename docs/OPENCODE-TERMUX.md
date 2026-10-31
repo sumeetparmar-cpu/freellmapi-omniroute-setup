@@ -44,5 +44,14 @@ It never touches the gateways or their data, is safe to re-run, and if neither m
 Then run OpenCode with `~/llm-gateways/bin/opencode-free` (it reads the guard keys from their mode-600 files; no key is on any command line or in any file it writes). Config: only `freellmapi` and `omniroute` are enabled providers, the background model is ours, sharing and auto-update are off; `bash termux/opencode-setup.sh check` re-verifies that at any time.
 End-to-end acceptance (real coding tasks through each gateway, independent review by the other, refused-provider check): `bash termux/opencode-accept.sh` (untested until you run it; budget 10-20 minutes because of OVH's 2 requests/minute).
 
+## 5b. First acceptance run on the phone (2026-10-31, Android 16, OpenCode 1.19.5 via proot-distro Debian)
+7 passed, 1 failed, with two weak checks found in my own script (fixed afterwards, to be re-run):
+* OpenCode started, used only our two guarded providers, and ran real tool loops (read, edit, run) through both gateways: exit 0 each.
+* **OmniRoute `gpt-oss-120b`: fixed the bug**, confirmed by an independent `node --test`, not by the model.
+* **FreeLLMAPI `gpt-oss-20b`: edited the file but did NOT fix the bug** (the test still got -1, expected 5). One sample, but it matches expectation: use the 120B as the main model. The config default is now `omniroute/ovhanon/gpt-oss-120b`; the 20B stays as the background model.
+* OpenCode refused a non-enabled provider (no Anthropic route). Every request was counted under provider `ovh`.
+* Found weak: the "guard refuses a paid model" check used the wrong key (so it got 401, not 403) and the review check accepted any APPROVE/REJECT line. Both are replaced by strict versions (own key must get 403; the reviewer must REJECT a known-bad diff and APPROVE a known-good one) plus a report of why the guards blocked requests.
+Honest summary: it works end to end and costs nothing, but expect the small open models to fail some tasks that Claude would not.
+
 ## 6. Usage tracking
 `bash termux/gateways.sh usage` shows, per guard, requests allowed/blocked today and counts by provider (read from the guard, not from the model's own claims).

@@ -47,12 +47,35 @@ git checkout -q -- . ; echo "== 2. same task through OmniRoute (omniroute/ovhano
 "$LAUNCH" run --model omniroute/ovhanon/gpt-oss-120b "$TASK" > "$T/or.out" 2>&1; echo "   opencode exit $?"; show OmniRoute "$T/or.out"
 ck "OmniRoute: file edited and tests pass" node --test
 git diff > "$T/or.diff"; ck "OmniRoute: the diff really changed math.js" test -s "$T/or.diff"
-echo "== 3. independent review: OmniRoute reviews the FreeLLMAPI diff"
-"$LAUNCH" run --model omniroute/ovhanon/gpt-oss-120b "Review this diff. First line must be exactly APPROVE or REJECT, then one sentence why. DIFF: $(cat "$T/fl.diff")" > "$T/review.out" 2>&1
-ck "review answered with APPROVE/REJECT" grep -qE '^(APPROVE|REJECT)' "$T/review.out"; head -n 3 "$T/review.out" | sed 's/^/   review> /'
+echo "== 3. independent review (OmniRoute 120B reviews a KNOWN-BAD and a KNOWN-GOOD diff; the right verdicts are REJECT and APPROVE)"
+RULE='A test requires add(2,3) to equal 5 and add(-1,1) to equal 0.'
+bad_diff='--- a/math.js
++++ b/math.js
+-function add(a, b) { return a - b; }
++function add(a, b) { return a * b; }'
+good_diff='--- a/math.js
++++ b/math.js
+-function add(a, b) { return a - b; }
++function add(a, b) { return a + b; }'
+verdict() { grep -m1 -E '^(APPROVE|REJECT)' "$1" | cut -c1-120; }
+"$LAUNCH" run --model omniroute/ovhanon/gpt-oss-120b "$RULE Review this diff. The first line of your answer must be exactly APPROVE or REJECT, then one sentence why. DIFF:
+$bad_diff" > "$T/rev_bad.out" 2>&1
+"$LAUNCH" run --model omniroute/ovhanon/gpt-oss-120b "$RULE Review this diff. The first line of your answer must be exactly APPROVE or REJECT, then one sentence why. DIFF:
+$good_diff" > "$T/rev_good.out" 2>&1
+echo "   verdict on the BAD diff : $(verdict "$T/rev_bad.out")"; echo "   verdict on the GOOD diff: $(verdict "$T/rev_good.out")"
+ck "reviewer REJECTs the known-bad diff"  bash -c "verdict_line=\$(grep -m1 -E '^(APPROVE|REJECT)' '$T/rev_bad.out'); case \"\$verdict_line\" in REJECT*) exit 0;; *) echo \"got: \$verdict_line\"; exit 1;; esac"
+ck "reviewer APPROVEs the known-good diff" bash -c "verdict_line=\$(grep -m1 -E '^(APPROVE|REJECT)' '$T/rev_good.out'); case \"\$verdict_line\" in APPROVE*) exit 0;; *) echo \"got: \$verdict_line\"; exit 1;; esac"
 echo "== 4. no paid fallback"
 "$LAUNCH" run --model anthropic/claude-sonnet-4-5 "say hi" > "$T/paid.out" 2>&1; rc=$?
-ck "OpenCode refuses a non-enabled provider (exit $rc, no Anthropic route)" bash -c "[ $rc -ne 0 ] || grep -qiE 'not found|unknown|disabled|not enabled|no provider' '$T/paid.out'"
-ck "guard refuses a paid model by name (HTTP 403)" bash -c "[ \"\$(curl -s -m10 -o /dev/null -w '%{http_code}' -X POST -H \"Authorization: Bearer \$(head -n1 '$GW_CONFIG_DIR/guard-freellmapi.clientkey')\" -H 'content-type: application/json' -d '{\"model\":\"openai/gpt-4o\",\"messages\":[]}' http://127.0.0.1:$ORP/v1/chat/completions)\" != 200 ]"
+echo "   anthropic attempt, what OpenCode said:"; tail -n 4 "$T/paid.out" | cut -c1-150 | sed 's/^/   > /'
+ck "OpenCode refuses a non-enabled provider (exit $rc, no Anthropic route)" bash -c "[ $rc -ne 0 ]"
+paid_code() { # paid_code PORT KEYFILE MODEL -> HTTP status of a chat request for that model, using the key that belongs to THAT guard
+  curl -s -m15 -o /dev/null -w '%{http_code}' -X POST -H "Authorization: Bearer $(head -n1 "$2")" -H 'content-type: application/json' -d "{\"model\":\"$3\",\"messages\":[{\"role\":\"user\",\"content\":\"x\"}]}" "http://127.0.0.1:$1/v1/chat/completions"; }
+export -f paid_code
+ck "OmniRoute guard refuses openai/gpt-4o with HTTP 403 (its own key)"            bash -c "[ \"\$(paid_code $ORP '$GW_CONFIG_DIR/guard-omniroute.clientkey' openai/gpt-4o)\" = 403 ]"
+ck "OmniRoute guard refuses anthropic/claude-sonnet-4-5 with HTTP 403 (its own key)" bash -c "[ \"\$(paid_code $ORP '$GW_CONFIG_DIR/guard-omniroute.clientkey' anthropic/claude-sonnet-4-5)\" = 403 ]"
 echo "-- guard counters after:  $(counts | tr '\n' ' ')   (allowed, blocked, requests by provider)"
+echo "-- what the guards BLOCKED during this run, by reason (from their own logs; reasons only, no keys):"
+for g in freellmapi omniroute; do f="$GW_LOG_DIR/free-guard-$g.log"; [ -f "$f" ] && { printf '   %-10s ' "$g"; grep -o '"type":"[a-z_]*"' "$f" | sort | uniq -c | sort -rn | tr -s ' ' | tr '\n' ';'; echo; }; done
+echo "   (local_rate_limit / cooldown = OVH's 2 requests/minute enforced locally: slow, not paid. model_blocked / param_blocked / route_blocked = something tried a name or field outside the free policy.)"
 echo "== acceptance: $PASS passed, $FAIL failed"; [ "$FAIL" -eq 0 ] || exit 1
