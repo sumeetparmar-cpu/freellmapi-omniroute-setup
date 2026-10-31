@@ -102,3 +102,6 @@ Chromium browser"). Lesson: `auto` can pick targets you never chose. Therefore:
 | Gateway client keys | shown in dashboards | Pass to `test-model` via env var, key file or hidden prompt. |
 
 Backups contain the keys above. Treat `llm-gateways/backups/` as secret; the scripts create it owner-only.
+
+## Correction 2026-10-31: OVH prices
+`GET https://oai.endpoints.kepler.ai.cloud.ovh.net/v1/models` now lists non-zero per-token prices (gpt-oss-20b: $0.00000005 in / $0.00000018 out; gpt-oss-120b: $0.00000009 / $0.00000047). The earlier statement "all priced 0" no longer holds. OVH's documentation (AI Endpoints, "Model rate limit") distinguishes anonymous use (2 requests/minute per IP and model, no credentials) from authenticated use (400 requests/minute per Public Cloud project, the billed mode). The anonymous route sends no credential, so no project exists to charge; the gateways cannot measure cost, so zero cost is an inference, not a measurement. Do not create an OVH API key.

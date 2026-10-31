@@ -9,6 +9,8 @@
 #   test     one GENUINE completion through each guard (OVH anonymous tier: 2 requests/minute/model)
 #   keys     endpoints, models, dashboards and the guard client keys (the secrets of this machine: do not paste them anywhere)
 #   doctor   read-only diagnosis with the exact fix for each problem
+#   compat   5 real requests per guard (~3 min, paced for OVH's 2/min): streaming, tool calls, tool round trip, JSON mode, long context: what a coding agent needs
+#   usage    what each guard let through today, by provider, plus what it blocked and any cooldowns (read-only)
 # Everything binds to 127.0.0.1. Nothing is exposed; no paid provider is configured and the guards refuse paid models.
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -108,6 +110,30 @@ cmd_doctor() {
   [ "$bad" -eq 0 ] && ok "no problems found" || { err "$bad problem(s) found"; return 1; }
 }
 
+cmd_compat() {
+  need_node
+  [ -s "$FL_CKEY" ] && [ -s "$OR_CKEY" ] || die "guard keys missing: run termux/bootstrap.sh first"
+  local t; t="$(mktemp -d)"
+  node "$HERE/../tools/agent-compat-check.mjs" --name FreeLLMAPI --base "http://127.0.0.1:$GUARD_PORT_FREELLMAPI/v1" --key-file "$FL_CKEY" --model "$FL_MODEL" >"$t/fl" 2>&1 & local p1=$!
+  node "$HERE/../tools/agent-compat-check.mjs" --name OmniRoute --base "http://127.0.0.1:$GUARD_PORT_OMNIROUTE/v1" --key-file "$OR_CKEY" --model "$OR_MODEL" >"$t/or" 2>&1 & local p2=$!
+  local rc=0; wait "$p1" || rc=1; wait "$p2" || rc=1
+  cat "$t/fl" "$t/or"; rm -rf "$t"; return $rc
+}
+
+cmd_usage() {
+  need_node
+  local n p
+  for n in freellmapi omniroute; do
+    p="$GUARD_PORT_FREELLMAPI"; [ "$n" = omniroute ] && p="$GUARD_PORT_OMNIROUTE"
+    curl -s -m5 "http://127.0.0.1:$p/__guard/status" | node -e '
+      let s = ""; process.stdin.on("data", (c) => (s += c)).on("end", () => {
+        try { const d = JSON.parse(s); const by = Object.entries(d.requestsToday || {}).map(([k, v]) => `${k}=${v}`).join(", ") || "none";
+          console.log(`${process.argv[1].padEnd(10)} day ${d.day}  allowed ${d.passed}  blocked ${d.blocked}  requests today by provider: ${by}  cooldowns: ${Object.keys(d.cooldownsSec || {}).join(", ") || "none"}  kill-switch: ${d.killSwitch ? "ENGAGED" : "off"}`);
+          console.log(`           caps (self-imposed, per provider): ${Object.entries(d.caps || {}).filter(([k]) => (d.requestsToday || {})[k] !== undefined).map(([k, v]) => `${k} ${v.rpm}/min ${v.rpd}/day`).join("; ") || "n/a"}`);
+        } catch { console.log(`${process.argv[1]}: guard not answering`); } });' "$n"
+  done
+}
+
 cmd_logs() {
   case "${1:-}" in
     freellmapi) tail -n 60 "$GW_LOG_DIR/freellmapi.log" ;;
@@ -127,6 +153,8 @@ case "$ACT" in
   test) cmd_test ;;
   keys) cmd_keys ;;
   doctor) cmd_doctor ;;
+  compat) cmd_compat ;;
+  usage) cmd_usage ;;
   logs) cmd_logs "$@" ;;
   *) sed -n '2,12p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac

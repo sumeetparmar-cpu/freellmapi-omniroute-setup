@@ -22,7 +22,7 @@ jobs:
       - name: secret scan
         run: scripts/check-secrets.sh
       - name: Free-only guard + policy tests (loopback mocks, no credentials)
-        run: node --test tests/guard/*.test.mjs && bash tests/vps/free-install.test.sh && bash tests/vps/monitor-guard.test.sh && bash tests/vps/guard-backup.test.sh && bash tests/termux/free-guard.test.sh && bash tests/termux/diagnose.test.sh && bash tests/termux/test-harness-exit.test.sh && bash tests/vps/preflight-extra.test.sh && bash tests/vps/partial-failure.test.sh
+        run: node --test tests/guard/*.test.mjs && bash tests/vps/free-install.test.sh && bash tests/vps/monitor-guard.test.sh && bash tests/vps/guard-backup.test.sh && bash tests/termux/free-guard.test.sh && bash tests/termux/diagnose.test.sh && bash tests/termux/opencode-setup.test.sh && bash tests/termux/test-harness-exit.test.sh && bash tests/vps/preflight-extra.test.sh && bash tests/vps/partial-failure.test.sh
       - name: Termux script tests (run on Linux)
         run: bash tests/termux/run-tests.sh && bash tests/termux/test-check-secrets.sh
       - name: PowerShell tests under pwsh on Linux
