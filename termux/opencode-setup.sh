@@ -76,7 +76,8 @@ EOF
 OC="$OC"; runner="\$(cat "\$OC/runner" 2>/dev/null)" || { echo "OpenCode is not installed yet: run  bash $HERE/opencode-install.sh" >&2; exit 1; }
 for p in $GUARD_PORT_FREELLMAPI $GUARD_PORT_OMNIROUTE; do (exec 3<>"/dev/tcp/127.0.0.1/\$p") 2>/dev/null || { echo "opencode-free: starting the gateways first" >&2; bash "$HERE/gateways.sh" start || exit 1; break; }; done
 case "\$runner" in
-  proot) exec proot-distro login debian --shared-tmp --bind "\$HOME:\$HOME" --bind "$GW_HOME:$GW_HOME" -- sh "$INNER" "\$HOME" "\$PWD" "\$@" ;;
+  proot) binds=(); case "$GW_HOME" in "\$HOME"/*) ;; *) binds=(--bind "$GW_HOME:$GW_HOME") ;; esac   # proot-distro already shares the Termux home at the same path; an extra bind only prints a warning
+         exec proot-distro login debian --shared-tmp "\${binds[@]}" -- sh "$INNER" "\$HOME" "\$PWD" "\$@" ;;
   *)     exec sh "$INNER" "\$HOME" "\$PWD" "\$@" ;;
 esac
 EOF

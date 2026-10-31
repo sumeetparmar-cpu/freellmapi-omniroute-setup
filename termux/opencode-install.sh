@@ -28,7 +28,9 @@ verify_grun() {
   have grun || { warn "glibc-runner is not available on this Termux"; return 1; }
   runs_ok grun "$BIN" --version
 }
-PROOT=(proot-distro login debian --shared-tmp --bind "$HOME:$HOME" --bind "$GW_HOME:$GW_HOME" --)   # a plain command prefix: timeout cannot run shell functions
+PROOT=(proot-distro login debian --shared-tmp)   # a plain command prefix: timeout cannot run shell functions. The Termux home is shared by proot-distro itself.
+case "$GW_HOME" in "$HOME"/*) ;; *) PROOT+=(--bind "$GW_HOME:$GW_HOME") ;; esac
+PROOT+=(--)
 verify_proot() {
   have proot-distro || { have pkg && info "installing proot-distro (Termux package)" && pkg install -y proot-distro >/dev/null 2>&1; }
   have proot-distro || { warn "proot-distro is not available on this Termux"; return 1; }
