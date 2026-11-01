@@ -5,7 +5,7 @@
 import { readFileSync } from 'node:fs';
 const a = process.argv.slice(2);
 const opt = (k, d) => { const i = a.indexOf(`--${k}`); return i >= 0 ? a[i + 1] : d; };
-const name = opt('name', 'gateway'); const base = opt('base').replace(/\/+$/, ''); const model = opt('model'); const tries = Number(opt('tries', '4')); const label = opt('provider-label', 'OVHcloud AI Endpoints, anonymous tier');
+const name = opt('name', 'gateway'); const base = opt('base').replace(/\/+$/, ''); const model = opt('model'); const tries = Number(opt('tries', '4'));
 const key = readFileSync(opt('key-file'), 'utf8').trim();
 if (!/^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?\//.test(`${base}/`)) { console.error('infer: --base must be loopback'); process.exit(2); }
 let last;
@@ -30,9 +30,9 @@ for (let n = 1; n <= tries; n++) {
 const ok = last?.http === 200 && String(last.text).trim() !== '' && last.usage?.total_tokens > 0;
 console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}`);
 console.log(`  endpoint : ${base}/chat/completions   (free-guard; no paid fallback)`);
-console.log(`  model    : ${model}${last?.model && last.model !== model ? ` (answered by ${last.model})` : ''}   provider: ${label}`);
+console.log(`  model    : ${model}${last?.model && last.model !== model ? ` (answered by ${last.model})` : ''}   provider: OVHcloud AI Endpoints, anonymous tier`);
 console.log(`  HTTP     : ${last?.http ?? 'n/a'}${last?.error ? `   error: ${String(last.error).slice(0, 160)}` : ''}`);
 console.log(`  response : ${JSON.stringify(String(last?.text ?? '').trim().slice(0, 80))}`);
 console.log(`  tokens   : ${last?.usage ? `prompt ${last.usage.prompt_tokens} / completion ${last.usage.completion_tokens} / total ${last.usage.total_tokens}` : 'n/a'}`);
-console.log(`  cost     : ${last?.cost != null ? last.cost : (opt('provider-label') ? 'not reported by the gateway (free tier; the guard enforces the allowlist and limits)' : 'not reported by the gateway; OVH anonymous tier has no billing path (no key, no account)')}`);
+console.log(`  cost     : ${last?.cost != null ? last.cost : 'not reported by the gateway; OVH anonymous tier has no billing path (no key, no account)'}`);
 process.exit(ok ? 0 : 1);
