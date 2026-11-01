@@ -119,6 +119,23 @@ ck "no duplicate FreeLLMAPI endpoint / OmniRoute node / connection" bash -c "
   n3=\$(curl -s -m10 -b '$TMP/cj' http://127.0.0.1:$OMNIROUTE_PORT/api/providers | node -pe 'JSON.parse(require(\"fs\").readFileSync(0)).connections.length')
   echo \"endpoints=\$n1 nodes=\$n2 connections=\$n3\"; [ \"\$n1\" = 1 ] && [ \"\$n2\" = 1 ] && [ \"\$n3\" = 1 ]"
 
+echo "# add-provider (FAKE keys only: Groq + Gemini behind the guards)"
+printf 'gsk_FAKEFAKEFAKEFAKEFAKEFAKE12345\n' >"$TMP/fake.groq"; printf 'AIzaFAKEFAKEFAKEFAKEFAKEFAKE_123\n' >"$TMP/fake.gem"; printf 'nope\n' >"$TMP/fake.bad"
+bash "$T/add-provider.sh" groq --key-file "$TMP/fake.groq" </dev/null >"$TMP/ap1.log" 2>&1
+bash "$T/add-provider.sh" groq --key-file "$TMP/fake.groq" </dev/null >"$TMP/ap2.log" 2>&1
+bash "$T/add-provider.sh" gemini --key-file "$TMP/fake.gem" </dev/null >"$TMP/ap3.log" 2>&1; ap3=$?
+bash "$T/add-provider.sh" gemini --key-file "$TMP/fake.gem" --accept-training </dev/null >"$TMP/ap4.log" 2>&1
+bash "$T/add-provider.sh" groq --key-file "$TMP/fake.bad" </dev/null >"$TMP/ap5.log" 2>&1; ap5=$?
+ck "a Groq key is stored in both gateways"                 bash -c "grep -q 'Groq key added' '$TMP/ap1.log' && grep -q 'Groq connection created' '$TMP/ap1.log'"
+ck "re-running adds nothing (idempotent, key kept)"        bash -c "grep -q 'already configured' '$TMP/ap2.log' && grep -q 'already exists' '$TMP/ap2.log' && ! grep -q 'key added' '$TMP/ap2.log'"
+ck "Gemini is refused without the data-use acknowledgement" test "$ap3" != 0
+ck "Gemini is added once acknowledged"                     bash -c "grep -q 'Gemini key added' '$TMP/ap4.log'"
+ck "a wrongly shaped key is rejected before anything is sent" test "$ap5" != 0
+ck "no key appears in any output or log"                   bash -c "! grep -rqE 'gsk_FAKE|AIzaFAKE' '$TMP'/ap?.log '$GW_HOME/logs' '$GW_HOME/state' 2>/dev/null"
+ck "the free-only audit stays clean with both providers"   bash -c "! ls '$GW_HOME'/state/free-audit-*.flag >/dev/null 2>&1"
+ck "OpenCode config gains the Groq + Gemini models and still passes its check" bash -c "OPENCODE_CFG_DIR='$TMP/occfg' bash '$T/opencode-setup.sh' config >/dev/null 2>&1 && OPENCODE_CFG_DIR='$TMP/occfg' bash '$T/opencode-setup.sh' check >/dev/null && grep -q 'groq/openai/gpt-oss-120b' '$TMP/occfg/opencode.json' && grep -q 'gemini/gemini-2.5-flash' '$TMP/occfg/opencode.json'"
+rm -f "$GW_HOME"/state/providers.groq "$GW_HOME"/state/providers.gemini
+
 echo "# stop / start / crash recovery"
 ck "stop closes all four ports"                            bash -c "bash '$T/gateways.sh' stop >/dev/null 2>&1; for p in $P_ALL; do (exec 3<>/dev/tcp/127.0.0.1/\$p) 2>/dev/null && exit 1; done; exit 0"
 ck "start brings all four back and doctor is clean"        bash -c "bash '$T/gateways.sh' start >/dev/null 2>&1 && bash '$T/gateways.sh' doctor >/dev/null 2>&1"

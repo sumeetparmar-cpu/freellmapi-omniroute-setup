@@ -33,14 +33,15 @@ cmd_config() {
   [ -s "$GW_CONFIG_DIR/guard-freellmapi.clientkey" ] && [ -s "$GW_CONFIG_DIR/guard-omniroute.clientkey" ] || die "guard keys missing: run termux/bootstrap.sh first"
   mkdir -p "$CFG_DIR" "$BIN_DIR"
   local new="$CFG.new"
-  FLP="$GUARD_PORT_FREELLMAPI" ORP="$GUARD_PORT_OMNIROUTE" FLM="$FL_MODEL" ORM="$OR_MODEL" node -e '
+  local extra=""; [ -e "$GW_STATE_DIR/providers.groq" ] && extra="groq"; [ -e "$GW_STATE_DIR/providers.gemini" ] && extra="$extra gemini"   # keys added by add-provider.sh
+  EXTRA="$extra" FLP="$GUARD_PORT_FREELLMAPI" ORP="$GUARD_PORT_OMNIROUTE" FLM="$FL_MODEL" ORM="$OR_MODEL" node -e '
     const e = process.env;
     const model = (id, name) => ({ [id]: { name, tool_call: true, reasoning: true, limit: { context: 131072, output: 16384 } } });
     const cfg = {
       $schema: "https://opencode.ai/config.json",
       // Only these two providers exist for OpenCode: no Anthropic, no OpenCode Zen, nothing that could bill or silently fall back.
       enabled_providers: ["freellmapi", "omniroute"],
-      model: `omniroute/${e.ORM}`,   // the larger model: it fixed the acceptance bug, the 20B did not
+      model: `omniroute/${e.ORM}`,   // the larger model: it fixed the acceptance bug, the 20B did not (Groq 120B takes over below when a Groq key was added)
       small_model: `freellmapi/${e.FLM}`,   // background chores (titles, summaries) must not use a default model of some other provider
       share: "disabled", autoupdate: false,
       permission: { edit: "ask", bash: "ask", webfetch: "ask" },
@@ -51,6 +52,10 @@ cmd_config() {
           options: { baseURL: `http://127.0.0.1:${e.ORP}/v1`, apiKey: "{env:OMNIROUTE_GUARD_KEY}" }, models: model(e.ORM, `${e.ORM} (OVH anonymous)`) },
       },
     };
+    const extra = (e.EXTRA || "").split(/\s+/).filter(Boolean);
+    const om = cfg.provider.omniroute.models;
+    if (extra.includes("groq")) { Object.assign(om, model("groq/openai/gpt-oss-120b", "gpt-oss-120b (Groq free tier)"), model("groq/openai/gpt-oss-20b", "gpt-oss-20b (Groq free tier)")); cfg.model = "omniroute/groq/openai/gpt-oss-120b"; }
+    if (extra.includes("gemini")) Object.assign(om, model("gemini/gemini-2.5-flash", "gemini-2.5-flash (Gemini free tier; Google may train on prompts)"), model("gemini/gemini-2.5-flash-lite", "gemini-2.5-flash-lite (Gemini free tier)"));
     require("fs").writeFileSync(process.argv[1], JSON.stringify(cfg, null, 2) + "\n", { mode: 0o600 });' "$new" || die "could not write the config"
   if [ -f "$CFG" ] && ! cmp -s "$CFG" "$new"; then cp -p "$CFG" "$CFG.bak-$(timestamp)"; info "existing config backed up to $CFG.bak-*"; fi
   mv "$new" "$CFG"; chmod 600 "$CFG"; ok "config written: $CFG (no secrets inside)"

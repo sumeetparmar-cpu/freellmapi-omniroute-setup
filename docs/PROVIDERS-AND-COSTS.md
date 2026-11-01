@@ -105,3 +105,17 @@ Backups contain the keys above. Treat `llm-gateways/backups/` as secret; the scr
 
 ## Correction 2026-10-31: OVH prices
 `GET https://oai.endpoints.kepler.ai.cloud.ovh.net/v1/models` now lists non-zero per-token prices (gpt-oss-20b: $0.00000005 in / $0.00000018 out; gpt-oss-120b: $0.00000009 / $0.00000047). The earlier statement "all priced 0" no longer holds. OVH's documentation (AI Endpoints, "Model rate limit") distinguishes anonymous use (2 requests/minute per IP and model, no credentials) from authenticated use (400 requests/minute per Public Cloud project, the billed mode). The anonymous route sends no credential, so no project exists to charge; the gateways cannot measure cost, so zero cost is an inference, not a measurement. Do not create an OVH API key.
+
+## Adding your own Groq / Gemini free keys on the phone (`termux/add-provider.sh`)
+
+```bash
+bash ~/freellmapi-omniroute-setup/termux/add-provider.sh groq      # hidden prompt for the key
+bash ~/freellmapi-omniroute-setup/termux/add-provider.sh gemini    # shows the data-use warning, requires typing I ACCEPT
+```
+
+- The key is typed at a hidden prompt (or `--key-file`), passed to one Node process through its environment only, and stored **only inside the gateways** (they encrypt it). It is never printed, logged or written by the script. Never paste it into chat.
+- It goes into FreeLLMAPI (`groq` / `google` platform) and OmniRoute (`groq` / `gemini` connection, activated). Re-running changes nothing (existing key kept, no duplicates).
+- The guards stay in front: only the allowlisted models pass (Groq `openai/gpt-oss-120b`, `openai/gpt-oss-20b`; Gemini `gemini-2.5-flash`, `-flash-lite`, `-pro`, ...), with self-imposed limits (Groq 30/min 1000/day, Gemini 10/min 250/day). The audit prunes anything else the catalog sync enables.
+- Preconditions that only you can guarantee: Groq account on the **Free** plan (never Developer); Gemini key from a project with **no billing account**. Gemini's free tier lets Google train on prompts and have humans review them: use Gemini only for non-private work.
+- Then it makes one real request per provider and prints `gateways.sh usage`. OpenCode gets the models (default becomes `omniroute/groq/openai/gpt-oss-120b`; the small model stays on FreeLLMAPI/OVH).
+- Tested in CI with FAKE keys (storage, idempotency, no leakage, acknowledgement gate, audit clean). Real inference with your keys is proven only by the output on your phone.
