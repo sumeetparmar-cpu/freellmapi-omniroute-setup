@@ -16,6 +16,9 @@ ck() { local n="$1"; shift; if "$@" >"$T/out" 2>&1; then PASS=$((PASS + 1)); ech
 bash "$HERE/opencode-setup.sh" check || die "config check failed"
 # Android can restart Termux, which stops the gateways: make sure all four processes are up (a no-op when they already are) BEFORE measuring anything.
 bash "$HERE/gateways.sh" start >/dev/null || die "could not start the gateways: run  bash $HERE/gateways.sh doctor"
+# The guard logs are cumulative: remember where they end NOW so the end report shows only what THIS run caused.
+loglines() { wc -l < "$GW_LOG_DIR/free-guard-$1.log" 2>/dev/null || echo 0; }
+L_FL="$(loglines freellmapi)"; L_OR="$(loglines omniroute)"
 T="$(mktemp -d)"; trap 'rm -rf "$T"' EXIT
 P="$T/proj"; mkdir -p "$P"; cd "$P" || exit 1
 git init -q 2>/dev/null; git config user.email t@t.invalid; git config user.name t
@@ -78,7 +81,9 @@ export -f paid_code
 ck "OmniRoute guard refuses openai/gpt-4o with HTTP 403 (its own key)"            bash -c "[ \"\$(paid_code $ORP '$GW_CONFIG_DIR/guard-omniroute.clientkey' openai/gpt-4o)\" = 403 ]"
 ck "OmniRoute guard refuses anthropic/claude-sonnet-4-5 with HTTP 403 (its own key)" bash -c "[ \"\$(paid_code $ORP '$GW_CONFIG_DIR/guard-omniroute.clientkey' anthropic/claude-sonnet-4-5)\" = 403 ]"
 echo "-- guard counters after:  $(counts | tr '\n' ' ')   (allowed, blocked, requests by provider)"
-echo "-- what the guards BLOCKED during this run, by reason (from their own logs; reasons only, no keys):"
-for g in freellmapi omniroute; do f="$GW_LOG_DIR/free-guard-$g.log"; [ -f "$f" ] && { printf '   %-10s ' "$g"; grep -o '"type":"[a-z_]*"' "$f" | sort | uniq -c | sort -rn | tr -s ' ' | tr '\n' ';'; echo; }; done
+echo "-- what the guards BLOCKED during THIS run, by reason (from their own logs; reasons and paths only, no keys):"
+for g in freellmapi omniroute; do f="$GW_LOG_DIR/free-guard-$g.log"; n="$L_FL"; [ "$g" = omniroute ] && n="$L_OR"
+  [ -f "$f" ] && { printf '   %-10s ' "$g"; r="$(tail -n +$((n + 1)) "$f" | grep -o '"type":"[a-z_]*"' | sort | uniq -c | sort -rn | tr -s ' ' | tr '\n' ';')"; echo "${r:-none}"
+    tail -n +$((n + 1)) "$f" | grep -E '"type":"(route_blocked|model_blocked|param_blocked)"' | cut -c1-200 | sed 's/^/      /' | head -n 8; }; done
 echo "   (local_rate_limit / cooldown = OVH's 2 requests/minute enforced locally: slow, not paid. model_blocked / param_blocked / route_blocked = something tried a name or field outside the free policy.)"
 echo "== acceptance: $PASS passed, $FAIL failed"; [ "$FAIL" -eq 0 ] || exit 1

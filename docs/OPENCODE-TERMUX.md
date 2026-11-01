@@ -53,5 +53,11 @@ End-to-end acceptance (real coding tasks through each gateway, independent revie
 * Found weak: the "guard refuses a paid model" check used the wrong key (so it got 401, not 403) and the review check accepted any APPROVE/REJECT line. Both are replaced by strict versions (own key must get 403; the reviewer must REJECT a known-bad diff and APPROVE a known-good one) plus a report of why the guards blocked requests.
 Honest summary: it works end to end and costs nothing, but expect the small open models to fail some tasks that Claude would not.
 
+### Final acceptance (phone, 2026-11-01): 8 passed, 2 failed
+* PASS: OmniRoute `gpt-oss-120b` fixed the bug (the agent also ran `node --test` itself); `math.js` really changed; the 120B reviewer REJECTed a known-bad diff and APPROVEd a known-good one; OpenCode refused the Anthropic provider; the OmniRoute guard returned HTTP 403 for `openai/gpt-4o` and `anthropic/claude-sonnet-4-5` with its own key; every request was counted under provider `ovh` (+16 on each guard during the run).
+* FAIL (2): FreeLLMAPI `gpt-oss-20b` did not fix the bug in either run: it invented an `apply_patch` tool OpenCode does not have, then stopped with exit 0. **Do not use the 20B for agent work.** It is configured only as the background model.
+* Unexplained, being checked: the guards' cumulative `route_blocked` (6) and `bad_host` (3) counts existed before these runs and did not change during them; the guard now logs the rejected Host.
+* Not tested: real multi-file projects, long sessions, or sustained use under OVH's 2 requests/minute/model limit.
+
 ## 6. Usage tracking
 `bash termux/gateways.sh usage` shows, per guard, requests allowed/blocked today and counts by provider (read from the guard, not from the model's own claims).
