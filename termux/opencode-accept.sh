@@ -14,6 +14,8 @@ ck() { local n="$1"; shift; if "$@" >"$T/out" 2>&1; then PASS=$((PASS + 1)); ech
 [ -f "$GW_HOME/opencode/runner" ] || die "OpenCode is not installed yet: run  bash $HERE/opencode-install.sh"
 [ -x "$LAUNCH" ] || die "run first: bash $HERE/opencode-setup.sh config"
 bash "$HERE/opencode-setup.sh" check || die "config check failed"
+# Android can restart Termux, which stops the gateways: make sure all four processes are up (a no-op when they already are) BEFORE measuring anything.
+bash "$HERE/gateways.sh" start >/dev/null || die "could not start the gateways: run  bash $HERE/gateways.sh doctor"
 T="$(mktemp -d)"; trap 'rm -rf "$T"' EXIT
 P="$T/proj"; mkdir -p "$P"; cd "$P" || exit 1
 git init -q 2>/dev/null; git config user.email t@t.invalid; git config user.name t
@@ -34,7 +36,7 @@ show() { # show NAME OUTFILE : what the model really did, so a failing check can
   echo "   --- $1: diff of math.js ---"; git diff -- math.js | sed 's/^/   | /' | head -n 14
   echo "   --- $1: last lines the agent said ---"; tail -n 8 "$2" | cut -c1-160 | sed 's/^/   > /'
 }
-counts() { for p in "$FLP" "$ORP"; do curl -s -m5 "http://127.0.0.1:$p/__guard/status" | node -e 'let s="";process.stdin.on("data",c=>s+=c).on("end",()=>{const d=JSON.parse(s);console.log(JSON.stringify([d.passed,d.blocked,d.requestsToday]))})'; done; }
+counts() { for p in "$FLP" "$ORP"; do curl -s -m5 "http://127.0.0.1:$p/__guard/status" | node -e 'let s="";process.stdin.on("data",c=>s+=c).on("end",()=>{try{const d=JSON.parse(s);console.log(JSON.stringify([d.passed,d.blocked,d.requestsToday]))}catch{console.log("[guard not answering]")}})'; done; }
 TASK='math.js has a bug: add() subtracts. Read math.js, fix the bug, then run: node --test   Report whether the tests pass.'
 
 ck "baseline: the test really fails before any fix" bash -c '! node --test'
