@@ -4,14 +4,19 @@
 #   scripts/check-secrets.sh --staged   # scans only staged content
 # Exit 1 on any finding. Heuristic: it reduces risk, it does not replace review.
 set -uo pipefail
-cd "$(git rev-parse --show-toplevel)" || exit 2
+# Inside a git work tree scan tracked/untracked-not-ignored files; in an extracted release archive (no .git) scan every file.
+if TOP="$(git rev-parse --show-toplevel 2>/dev/null)"; then IN_GIT=1; cd "$TOP" || exit 2
+else IN_GIT=0; cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 2; fi
 
-if [ "${1:-}" = "--staged" ]; then
+if [ "$IN_GIT" = 0 ]; then
+  mapfile -t FILES < <(find . -type f -not -path './.git/*' -not -path '*/node_modules/*' | sed 's|^\./||' | sort)
+elif [ "${1:-}" = "--staged" ]; then
   mapfile -t FILES < <(git diff --cached --name-only --diff-filter=ACMR)
 else
   mapfile -t FILES < <({ git ls-files; git ls-files --others --exclude-standard; } | sort -u)
 fi
 
+[ "${#FILES[@]}" -gt 0 ] || [ "${1:-}" = "--staged" ] || { echo "check-secrets: no files found to scan (refusing to report a vacuous pass)"; exit 2; }
 FOUND=0
 flag() { printf 'SECRET? %s:%s: %s\n' "$1" "$2" "$3"; FOUND=1; }
 
@@ -44,7 +49,7 @@ ALLOW='(example|placeholder|your[-_ ]|<[^>]+>|x{6,}|fake|dummy|mock-key|notreal|
 for f in "${FILES[@]}"; do
   [ -f "$f" ] || continue
   case "$f" in scripts/check-secrets.sh|tests/termux/test-check-secrets.sh) continue;; esac
-  if [ "${1:-}" = "--staged" ]; then content="$(git show ":$f" 2>/dev/null)"; else content="$(cat "$f" 2>/dev/null)"; fi
+  if [ "${1:-}" = "--staged" ] && [ "$IN_GIT" = 1 ]; then content="$(git show ":$f" 2>/dev/null)"; else content="$(cat "$f" 2>/dev/null)"; fi
   [ -n "$content" ] || continue
   for pat in "${PATTERNS[@]}"; do
     while IFS=: read -r ln line; do

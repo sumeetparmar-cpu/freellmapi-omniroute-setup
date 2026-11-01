@@ -36,6 +36,8 @@ die()  { err "$*"; exit 1; }
 
 have() { command -v "$1" >/dev/null 2>&1; }
 is_termux() { [ -n "${TERMUX_VERSION:-}" ] || [ -d /data/data/com.termux/files/usr ]; }
+# node-gyp (native modules such as better-sqlite3) aborts on Termux unless the NDK path is defined, even empty: well-known Termux workaround.
+if is_termux && [ -z "${GYP_DEFINES:-}" ]; then export GYP_DEFINES="android_ndk_path=''"; fi
 
 ensure_dirs() {
   umask 077
@@ -124,7 +126,24 @@ json_get() { node -e 'let s="";process.stdin.on("data",c=>s+=c).on("end",()=>{tr
 # --- processes --------------------------------------------------------------
 pid_file() { echo "$GW_RUN_DIR/$1.pid"; }
 gw_pid() { local f; f="$(pid_file "$1")"; [ -f "$f" ] && cat "$f" || true; }
-gw_running() { local p; p="$(gw_pid "$1")"; [ -n "$p" ] && kill -0 "$p" 2>/dev/null; }
+# A killed process whose parent never reaped it stays a zombie, and kill -0 still succeeds on a zombie: treat state Z as "not running".
+pid_alive() { # pid_alive PID
+  kill -0 "$1" 2>/dev/null || return 1
+  local st; st="$(sed -n 's/^[^)]*) \(.\).*/\1/p' "/proc/$1/stat" 2>/dev/null)"
+  [ "$st" != Z ]
+}
+# daemon_start uses setsid, so everything a gateway spawns shares its process group (= the PID in the pid file). If only the supervisor
+# is killed (Android's low-memory killer does that) the server child lives on as an orphan: it still serves the port and must still be stoppable.
+group_alive() { # group_alive PGID : any non-zombie member?
+  local f st pg
+  for f in /proc/[0-9]*/stat; do
+    read -r st _ pg _ < <(sed 's/^[0-9]* (.*) //' "$f" 2>/dev/null) || continue
+    [ "${pg:-}" = "$1" ] && [ "${st:-}" != Z ] && return 0
+  done
+  return 1
+}
+gw_alive() { pid_alive "$1" || group_alive "$1"; }
+gw_running() { local p; p="$(gw_pid "$1")"; [ -n "$p" ] && gw_alive "$p"; }
 # daemon_start NAME LOGFILE cmd args...   (environment is inherited)
 daemon_start() {
   local name="$1" log="$2"; shift 2
@@ -135,19 +154,28 @@ daemon_start() {
 gw_stop() { # gw_stop NAME [PORT]
   local name="$1" port="${2:-}" p i
   p="$(gw_pid "$name")"
-  if [ -z "$p" ] || ! kill -0 "$p" 2>/dev/null; then rm -f "$(pid_file "$name")"; info "$name is not running"; return 0; fi
+  if [ -z "$p" ] || ! gw_alive "$p"; then rm -f "$(pid_file "$name")"; info "$name is not running"; return 0; fi
   # OmniRoute's CLI is a supervisor with a separate server child (older builds ignore SIGTERM once orphaned).
   # daemon_start uses setsid, so the whole process group (-PID) can be signalled; fall back to the single PID.
-  _gw_alive() { kill -0 -- "-$1" 2>/dev/null || kill -0 "$1" 2>/dev/null; }
   kill -TERM -- "-$p" 2>/dev/null || kill "$p" 2>/dev/null || true
-  for i in 1 2 3 4 5 6 7 8 9 10; do _gw_alive "$p" || break; sleep 1; done
-  if _gw_alive "$p"; then warn "$name did not exit on SIGTERM; sending SIGKILL"; kill -KILL -- "-$p" 2>/dev/null || kill -9 "$p" 2>/dev/null || true; sleep 1; fi
+  for i in 1 2 3 4 5 6 7 8 9 10; do gw_alive "$p" || break; sleep 1; done
+  if gw_alive "$p"; then warn "$name did not exit on SIGTERM; sending SIGKILL"; kill -KILL -- "-$p" 2>/dev/null || kill -9 "$p" 2>/dev/null || true; sleep 1; fi
   rm -f "$(pid_file "$name")"
   if [ -n "$port" ]; then
     for i in 1 2 3 4 5 6 7 8 9 10; do port_in_use "$port" || break; sleep 1; done
     if port_in_use "$port"; then warn "port $port is still in use after stopping $name (an unrelated process may own it)"; fi
   fi
   ok "$name stopped"
+}
+# retry_cmd TRIES cmd args...  : mobile data and proxies drop long downloads (ECONNRESET); retry with a growing pause before giving up.
+retry_cmd() {
+  local tries="$1" n=1 rc; shift
+  while :; do
+    "$@"; rc=$?
+    [ "$rc" -eq 0 ] && return 0
+    [ "$n" -ge "$tries" ] && return "$rc"
+    warn "attempt $n/$tries failed (exit $rc); retrying in $((n * 10))s"; sleep $((n * 10)); n=$((n + 1))
+  done
 }
 wait_for_http() { # wait_for_http URL SECONDS  -> 0 when HTTP 200
   local url="$1" n="${2:-60}" i
@@ -161,16 +189,27 @@ timestamp() { date -u +%Y%m%dT%H%M%SZ; }
 # secrets (encryption keys, encrypted provider keys): it is created 0600 under $GW_BACKUP_DIR.
 backup_paths() {
   local name="$1" label="$2"; shift 2
-  local dir="$GW_BACKUP_DIR/$name" out p rel=()
+  local dir="$GW_BACKUP_DIR/$name" out tmp p rel=()
   mkdir -p "$dir"; chmod 700 "$dir"
-  out="$dir/$(timestamp)-$label.tar.gz"
+  # Leftovers of a backup that was killed mid-write. They never end in .tar.gz, so they are never listed, restored or chosen as "latest".
+  find "$dir" -maxdepth 1 -name '*.partial' -mmin +5 -delete 2>/dev/null || true
+  out="$dir/$(timestamp)-$label.tar.gz"; tmp="$out.partial"
   for p in "$@"; do [ -e "$p" ] && rel+=("${p#/}"); done
   [ "${#rel[@]}" -gt 0 ] || { warn "nothing to back up for $name yet"; return 1; }
-  ( umask 077; tar -C / -czf "$out" "${rel[@]}" )
-  chmod 600 "$out"
+  # Write beside the final name, check tar's own exit status, verify the archive reads back, and only then rename (atomic on one filesystem).
+  # A failed or truncated archive (disk full, OOM, power loss) is deleted instead of being reported as a successful backup.
+  if ! ( umask 077; tar -C / -czf "$tmp" "${rel[@]}" ) || ! gzip -t "$tmp" 2>/dev/null || ! tar -tzf "$tmp" >/dev/null 2>&1; then
+    rm -f -- "$tmp"; err "backup failed or produced an unreadable archive (disk full?); nothing was kept"; return 1
+  fi
+  chmod 600 "$tmp" && mv -- "$tmp" "$out"
   printf '%s\n' "$out"
 }
-latest_backup() { ls -1t "$GW_BACKUP_DIR/$1"/*.tar.gz 2>/dev/null | head -n1; }
+# Newest backup that actually reads back: a truncated archive with a newer mtime must not shadow the last good one (that is what rollback needs).
+latest_backup() {
+  local f
+  while IFS= read -r f; do if gzip -t "$f" 2>/dev/null; then printf '%s\n' "$f"; return 0; fi; done < <(ls -1t "$GW_BACKUP_DIR/$1"/*.tar.gz 2>/dev/null)
+  return 0
+}
 list_backups() { ls -1t "$GW_BACKUP_DIR/$1"/*.tar.gz 2>/dev/null || info "no backups for $1"; }
 # restore_archive ARCHIVE ALLOWED_PATH...  (caller must stop the gateway first)
 # Archives record absolute paths (minus the leading "/"). Every entry must be one of the ALLOWED_PATHs

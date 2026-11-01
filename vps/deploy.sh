@@ -97,12 +97,18 @@ _node_verify() {
 _node_extract() { tar -xzf "$NODE_TMP/node.tgz" -C "$NODE_TMP" --no-same-owner && [ -x "$NODE_TMP/node-v$NODE_VERSION-linux-$ARCH/bin/node" ]; }
 _node_install() {
   local dest="$LLM_ROOT/runtime/node-v$NODE_VERSION"
-  [ -e "$dest" ] && rm -rf -- "$NODE_TMP/node-v$NODE_VERSION-linux-$ARCH" && return 0
-  mv "$NODE_TMP/node-v$NODE_VERSION-linux-$ARCH" "$dest" && chown -R root:root "$dest" && chmod -R go-w "$dest"
+  # Idempotent AND self-repairing: if an earlier run was killed between the move and the chown/chmod, the directory exists but may be
+  # owned/writable wrongly, so ownership and modes are (re)applied every time. The move itself is an atomic rename.
+  if [ -e "$dest" ]; then rm -rf -- "$NODE_TMP/node-v$NODE_VERSION-linux-$ARCH"
+  else mv "$NODE_TMP/node-v$NODE_VERSION-linux-$ARCH" "$dest" || return 1; fi
+  chown -R root:root "$dest" && chmod -R go-w "$dest" && [ -x "$dest/bin/node" ]
 }
 step_runtime() {
   ARCH="$(node_arch)" || die "unsupported architecture $(uname -m)"
   NODE_URL="$NODE_DIST_URL/v$NODE_VERSION/node-v$NODE_VERSION-linux-$ARCH.tar.gz"
+  # A download killed with SIGKILL cannot run its EXIT trap and leaves ~30 MB behind. Remove only OUR stale temp dirs (older than 2 minutes,
+  # so a concurrent run's fresh one is untouched).
+  [ "$APPLY" = 1 ] && find "$LLM_ROOT/runtime" -maxdepth 1 -type d -name '.dl.*' -mmin +2 -exec rm -rf -- {} + 2>/dev/null
   if [ "$APPLY" = 1 ]; then NODE_TMP="$(mktemp -d "$LLM_ROOT/runtime/.dl.XXXXXX")"; trap 'rm -rf -- "$NODE_TMP"' EXIT; else NODE_TMP="$LLM_ROOT/runtime/.dl.XXXXXX"; fi
   act "downloads $NODE_URL into a temporary directory under $LLM_ROOT/runtime" _node_fetch
   act "aborts unless the SHA-256 equals the value pinned in vps-common.sh (from nodejs.org SHASUMS256.txt)" _node_verify

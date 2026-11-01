@@ -14,6 +14,8 @@ NAME=omniroute
 PREFIX="$GW_HOME/omniroute"
 DATA="$GW_HOME/omniroute-data"
 ENVF="$GW_CONFIG_DIR/omniroute.env"
+# free-guard client-key HASHES (not secret) ride along in backups so a restore does not lock clients out; the upstream key and audit credentials are deliberately NOT backed up (re-create them from the dashboard).
+GUARD_CLIENTS="$GW_CONFIG_DIR/free-guard.clients"
 LOG="$GW_LOG_DIR/omniroute.log"
 PORT="$OMNIROUTE_PORT"
 BASE_URL="http://127.0.0.1:$PORT"
@@ -88,9 +90,13 @@ npm_install_omniroute() { # npm_install_omniroute VERSION
   mkdir -p "$PREFIX"
   local npm_major args=(install --prefix "$PREFIX" --no-audit --no-fund "omniroute@$1")
   npm_major="$(npm -v | cut -d. -f1)"
-  # npm >= 11 blocks lifecycle scripts unless allowed (upstream README, Quick Start).
-  [ "$npm_major" -ge 11 ] && args+=("--allow-scripts=$ALLOW_SCRIPTS")
-  npm "${args[@]}"
+  # npm >= 11 blocks lifecycle scripts unless allowed (upstream README, Quick Start). Recent npm 11 REJECTS the --allow-scripts flag for a
+  # project-scoped install (EALLOWSCRIPTS; found by CI on npm 11.19), so the allow-list goes into the prefix's own .npmrc, which every npm 11 reads.
+  if [ "$npm_major" -ge 11 ]; then
+    { grep -v '^allow-scripts=' "$PREFIX/.npmrc" 2>/dev/null; printf 'allow-scripts=%s\n' "$ALLOW_SCRIPTS"; } > "$PREFIX/.npmrc.new" && mv "$PREFIX/.npmrc.new" "$PREFIX/.npmrc"
+  fi
+  args+=(--fetch-retries=5 --fetch-retry-mintimeout=4000 --fetch-retry-maxtimeout=60000)
+  retry_cmd 3 npm "${args[@]}"
   node_version > "$GW_STATE_DIR/omniroute.node_version"
 }
 
@@ -177,7 +183,7 @@ cmd_test_model() {
 cmd_backup() {
   ensure_dirs
   gw_running $NAME && warn "gateway is running; stop it first for a fully consistent SQLite copy (continuing)"
-  local out; out="$(backup_paths $NAME "${1:-manual}" "$ENVF" "$DATA")" || return 1
+  local out; out="$(backup_paths $NAME "${1:-manual}" "$ENVF" "$DATA" "$GUARD_CLIENTS")" || return 1
   ok "backup: $out"; warn "This archive contains STORAGE_ENCRYPTION_KEY, secrets and encrypted provider credentials. Keep it private; never commit it."
 }
 cmd_list_backups() { list_backups $NAME; }
@@ -187,7 +193,7 @@ cmd_restore() {
   confirm "Restore $a over current OmniRoute config+data?" || die "aborted"
   gw_stop $NAME $PORT
   cmd_backup pre-restore >/dev/null || true
-  restore_archive "$a" "$ENVF" "$DATA"; ok "restored $a (a pre-restore backup was taken). Start with: $0 start"
+  restore_archive "$a" "$ENVF" "$DATA" "$GUARD_CLIENTS"; ok "restored $a (a pre-restore backup was taken). Start with: $0 start"
 }
 
 cmd_update() {
@@ -214,7 +220,7 @@ cmd_rollback() {
     local a; a="$(ls -1t "$GW_BACKUP_DIR/$NAME"/*-pre-update.tar.gz 2>/dev/null | head -n1)"
     [ -n "$a" ] || die "no pre-update backup found"
     cmd_backup pre-rollback >/dev/null || true
-    restore_archive "$a" "$ENVF" "$DATA"; ok "data restored from $a"
+    restore_archive "$a" "$ENVF" "$DATA" "$GUARD_CLIENTS"; ok "data restored from $a"
   else
     info "data left as-is. Newer DB migrations may not be reversible; use --with-data if the old version fails to start."
   fi

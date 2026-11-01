@@ -15,6 +15,8 @@ REPO_URL="${FREELLMAPI_REPO_URL:-https://github.com/tashfeenahmed/freellmapi.git
 SRC="$GW_HOME/freellmapi"
 DATA="$GW_HOME/freellmapi-data"
 ENVF="$GW_CONFIG_DIR/freellmapi.env"
+# free-guard client-key HASHES (not secret) ride along in backups so a restore does not lock clients out; the upstream key and audit credentials are deliberately NOT backed up (re-create them from the dashboard).
+GUARD_CLIENTS="$GW_CONFIG_DIR/free-guard.clients"
 LOG="$GW_LOG_DIR/freellmapi.log"
 PORT="$FREELLMAPI_PORT"
 BASE_URL="http://127.0.0.1:$PORT"
@@ -74,7 +76,7 @@ write_env_if_missing() {
 build() {
   ( cd "$SRC"
     info "npm install (a failing optional better-sqlite3 build is harmless on Android)"
-    npm install --no-audit --no-fund
+    retry_cmd 3 npm install --no-audit --no-fund --fetch-retries=5 --fetch-retry-mintimeout=4000 --fetch-retry-maxtimeout=60000
     info "npm run build"
     npm run build )
   node_version > "$GW_STATE_DIR/freellmapi.node_version"
@@ -99,6 +101,12 @@ cmd_rebuild() {
 cmd_install() {
   check_prereqs
   ensure_dirs
+  # A clone killed half-way (SIGKILL, dropped connection) can leave a $SRC with a .git but no usable HEAD or tree. Without this check the next
+  # run would say "source already present" and fail later in the build. "Complete" = a resolvable HEAD and a package.json; only a directory
+  # inside this gateway's own home is ever removed.
+  if [ -d "$SRC" ] && { ! git -C "$SRC" rev-parse --verify -q 'HEAD^{commit}' >/dev/null 2>&1 || [ ! -f "$SRC/package.json" ]; }; then
+    case "$SRC" in "$GW_HOME"/?*) warn "$SRC is an incomplete checkout from an interrupted install: removing it and cloning again"; rm -rf -- "$SRC" ;; *) die "$SRC looks incomplete but is outside $GW_HOME; refusing to touch it" ;; esac
+  fi
   if [ -d "$SRC/.git" ]; then info "source already at $SRC ($(git -C "$SRC" rev-parse --short HEAD)); use 'update' to move it"
   else
     info "cloning $REPO_URL ($FREELLMAPI_REF)"
@@ -160,7 +168,7 @@ cmd_test_model() {
 cmd_backup() {
   ensure_dirs
   gw_running $NAME && warn "gateway is running; stop it first for a fully consistent SQLite copy (continuing: WAL files are included)"
-  local out; out="$(backup_paths $NAME "${1:-manual}" "$ENVF" "$DATA")" || return 1
+  local out; out="$(backup_paths $NAME "${1:-manual}" "$ENVF" "$DATA" "$GUARD_CLIENTS")" || return 1
   ok "backup: $out"; warn "This archive contains your ENCRYPTION_KEY and encrypted provider keys. Keep it private; never commit it."
 }
 cmd_list_backups() { list_backups $NAME; }
@@ -170,7 +178,7 @@ cmd_restore() {
   confirm "Restore $a over current FreeLLMAPI config+data?" || die "aborted"
   gw_stop $NAME $PORT
   cmd_backup pre-restore >/dev/null || true
-  restore_archive "$a" "$ENVF" "$DATA"; ok "restored $a (a pre-restore backup was taken). Start with: $0 start"
+  restore_archive "$a" "$ENVF" "$DATA" "$GUARD_CLIENTS"; ok "restored $a (a pre-restore backup was taken). Start with: $0 start"
 }
 
 cmd_update() {
@@ -201,7 +209,7 @@ cmd_rollback() {
     local a; a="$(ls -1t "$GW_BACKUP_DIR/$NAME"/*-pre-update.tar.gz 2>/dev/null | head -n1)"
     [ -n "$a" ] || die "no pre-update backup found"
     cmd_backup pre-rollback >/dev/null || true
-    restore_archive "$a" "$ENVF" "$DATA"; ok "data restored from $a"
+    restore_archive "$a" "$ENVF" "$DATA" "$GUARD_CLIENTS"; ok "data restored from $a"
   else
     info "data left as-is. Newer DB migrations may not be reversible; use --with-data if the old version fails to start."
   fi

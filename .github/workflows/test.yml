@@ -8,7 +8,11 @@ permissions:
 
 jobs:
   linux:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-26.04]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -17,6 +21,8 @@ jobs:
         run: shellcheck -x -S warning termux/*.sh termux/lib/common.sh tests/termux/*.sh scripts/*.sh vps/*.sh vps/lib/*.sh tests/vps/*.sh
       - name: secret scan
         run: scripts/check-secrets.sh
+      - name: Free-only guard + policy tests (loopback mocks, no credentials)
+        run: node --test tests/guard/*.test.mjs && bash tests/vps/free-install.test.sh && bash tests/vps/monitor-guard.test.sh && bash tests/vps/guard-backup.test.sh && bash tests/termux/free-guard.test.sh && bash tests/termux/diagnose.test.sh && bash tests/termux/opencode-setup.test.sh && bash tests/termux/opencode-install.test.sh && bash tests/termux/test-harness-exit.test.sh && bash tests/vps/preflight-extra.test.sh && bash tests/vps/partial-failure.test.sh
       - name: Termux script tests (run on Linux)
         run: bash tests/termux/run-tests.sh && bash tests/termux/test-check-secrets.sh
       - name: PowerShell tests under pwsh on Linux
@@ -39,16 +45,26 @@ jobs:
 
   # These two jobs make REAL system changes (test users, /srv/llm*); they run only on GitHub's disposable runner VMs and refuse to run elsewhere.
   vps-privileged:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-26.04]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: '24' }
       - name: VPS toolkit tests incl. real users, isolation, units, verify, gwctl
         run: sudo env PATH="$PATH" LLM_TEST_ALLOW_SYSTEM_CHANGES=1 bash tests/vps/run-tests.sh
+      - name: Interrupted installs and partial failures (runtime download, toolkit swap, backups, checkout)
+        run: sudo env PATH="$PATH" LLM_TEST_ALLOW_SYSTEM_CHANGES=1 bash tests/vps/partial-failure.test.sh
 
   vps-e2e:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-26.04]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
@@ -56,3 +72,58 @@ jobs:
         with: { node-version: '24' }
       - name: End-to-end rehearsal (pinned Node download, both real installs, quota-report, backup, verify)
         run: sudo env PATH="$PATH" LLM_TEST_ALLOW_SYSTEM_CHANGES=1 bash tests/vps/e2e-sandbox.sh
+
+  # Real systemd + the two hosted Ubuntu LTS images: installs the guard/audit units with free-install.sh, starts them, kills them,
+  # sandbox-probes them, drives the audit -> kill-switch loop. Also the Ubuntu 26.04 validation (real OS, real systemd).
+  systemd-guard:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-26.04]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '24' }
+      - name: Real-systemd guard/audit tests
+        run: sudo env PATH="$PATH" LLM_TEST_ALLOW_SYSTEM_CHANGES=1 REQUIRE_SYSTEMD=1 bash tests/vps/systemd-guard.test.sh
+      - name: Journal of the units (on failure)
+        if: failure()
+        run: sudo journalctl --no-pager -n 200 -u 'llm-guard-*' -u 'llm-free-audit-*' || true
+
+  # The GATEWAY units (llm-freellmapi / llm-omniroute) under real systemd with the real installs: cgroup limits read from the kernel,
+  # restart policy, StartLimit crash-loop, KillMode, graceful stop, independence. The sandbox e2e job above runs with LLM_NO_SYSTEMD=1.
+  e2e-systemd:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-26.04]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '24' }
+      - name: Gateway units under real systemd (real installs)
+        run: sudo env PATH="$PATH" LLM_TEST_ALLOW_SYSTEM_CHANGES=1 REQUIRE_SYSTEMD=1 bash tests/vps/e2e-systemd.sh
+      - name: Journal of the gateway units (on failure)
+        if: failure()
+        run: sudo journalctl --no-pager -n 200 -u 'llm-freellmapi' -u 'llm-omniroute' || true
+
+  # The Termux one-command bootstrap, run for real on Linux: pinned installs, API provisioning of the keyless OVH route, guards, restart and
+  # crash recovery, idempotent re-run. This proves the scripts, NOT Android/Termux (Bionic libc, pkg, battery management): that needs a phone.
+  # Real OVH inference is not run here (shared runner IPs vs OVH's 2 requests/minute/model anonymous limit).
+  termux-bootstrap:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-26.04]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '24' }
+      - name: Bootstrap FreeLLMAPI + OmniRoute with guards (real installs)
+        run: LLM_TEST_BOOTSTRAP=1 bash tests/termux/bootstrap.test.sh
