@@ -368,3 +368,15 @@ test('refused model strings are truncated in the log', async () => {
     assert.ok(line.length < 1000, `log line is ${line.length} bytes`);
   } finally { await r.close(); }
 });
+
+test('a rejected Host header is logged (truncated, printable) so a surprising block can be diagnosed', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'fg-host-')); const logFile = join(dir, 'g.log');
+  const r = await rig('omniroute', { logFile, quiet: false });
+  try {
+    const x = await r.call('POST', '/v1/chat/completions', chat(GOOD), { host: 'evil.example.com:1234' });
+    assert.equal(x.status, 421);
+    const rec = readFileSync(logFile, 'utf8').trim().split('\n').map((l) => JSON.parse(l)).find((e) => e.type === 'bad_host');
+    assert.equal(rec.host, 'evil.example.com'); assert.equal(rec.method, 'POST');
+    assert.ok(!JSON.stringify(rec).includes('authorization'));
+  } finally { await r.close(); }
+});

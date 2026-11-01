@@ -165,7 +165,7 @@ export function createGuard(opts) {
     try { url = new URL(req.url, 'http://x'); } catch { return deny(res, 400, 'bad_url', 'bad request URL'); }
     // DNS-rebinding / wrong-vhost defence: only names we expect.
     const host = String(req.headers.host ?? '').toLowerCase().replace(/:\d+$/, '');
-    if (!allowedHosts.has(host)) { req.resume(); return deny(res, 421, 'bad_host', 'Host header not allowed'); }
+    if (!allowedHosts.has(host)) { req.resume(); return deny(res, 421, 'bad_host', 'Host header not allowed', { host: host.replace(/[^\x21-\x7e]/g, '?').slice(0, 60), method: req.method }); }
     if (url.pathname === '/__guard/status') {
       const ra = req.socket.remoteAddress ?? '';
       const proxied = ['x-forwarded-for', 'forwarded', 'x-real-ip', 'via', 'x-forwarded-host'].some((h) => h in req.headers);
