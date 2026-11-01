@@ -40,15 +40,16 @@ counts() { for p in "$FLP" "$ORP"; do curl -s -m5 "http://127.0.0.1:$p/__guard/s
 TASK='math.js has a bug: add() subtracts. Read math.js, fix the bug, then run: node --test   Report whether the tests pass.'
 
 ck "baseline: the test really fails before any fix" bash -c '! node --test'
+echo "(do not type or paste in this window until it finishes)"
 echo "-- guard counters before: $(counts | tr '\n' ' ')"
 echo "== 1. coding task through FreeLLMAPI (freellmapi/gpt-oss-20b)"
-"$LAUNCH" run --model freellmapi/gpt-oss-20b "$TASK" > "$T/fl.out" 2>&1; echo "   opencode exit $?"; show FreeLLMAPI "$T/fl.out"
+"$LAUNCH" run --model freellmapi/gpt-oss-20b "$TASK" > "$T/fl.out" 2>&1 < /dev/null; echo "   opencode exit $?"; show FreeLLMAPI "$T/fl.out"
 ck "FreeLLMAPI: file edited and tests pass (checked by node --test, not by the model)" node --test
-git diff > "$T/fl.diff"; ck "FreeLLMAPI: the diff really changed math.js" test -s "$T/fl.diff"
+git diff -- math.js > "$T/fl.diff"; ck "FreeLLMAPI: math.js itself was changed" test -s "$T/fl.diff"
 git checkout -q -- . ; echo "== 2. same task through OmniRoute (omniroute/ovhanon/gpt-oss-120b)"
-"$LAUNCH" run --model omniroute/ovhanon/gpt-oss-120b "$TASK" > "$T/or.out" 2>&1; echo "   opencode exit $?"; show OmniRoute "$T/or.out"
+"$LAUNCH" run --model omniroute/ovhanon/gpt-oss-120b "$TASK" > "$T/or.out" 2>&1 < /dev/null; echo "   opencode exit $?"; show OmniRoute "$T/or.out"
 ck "OmniRoute: file edited and tests pass" node --test
-git diff > "$T/or.diff"; ck "OmniRoute: the diff really changed math.js" test -s "$T/or.diff"
+git diff -- math.js > "$T/or.diff"; ck "OmniRoute: math.js itself was changed" test -s "$T/or.diff"
 echo "== 3. independent review (OmniRoute 120B reviews a KNOWN-BAD and a KNOWN-GOOD diff; the right verdicts are REJECT and APPROVE)"
 RULE='A test requires add(2,3) to equal 5 and add(-1,1) to equal 0.'
 bad_diff='--- a/math.js
@@ -61,14 +62,14 @@ good_diff='--- a/math.js
 +function add(a, b) { return a + b; }'
 verdict() { grep -m1 -E '^(APPROVE|REJECT)' "$1" | cut -c1-120; }
 "$LAUNCH" run --model omniroute/ovhanon/gpt-oss-120b "$RULE Review this diff. The first line of your answer must be exactly APPROVE or REJECT, then one sentence why. DIFF:
-$bad_diff" > "$T/rev_bad.out" 2>&1
+$bad_diff" > "$T/rev_bad.out" 2>&1 < /dev/null
 "$LAUNCH" run --model omniroute/ovhanon/gpt-oss-120b "$RULE Review this diff. The first line of your answer must be exactly APPROVE or REJECT, then one sentence why. DIFF:
-$good_diff" > "$T/rev_good.out" 2>&1
+$good_diff" > "$T/rev_good.out" 2>&1 < /dev/null
 echo "   verdict on the BAD diff : $(verdict "$T/rev_bad.out")"; echo "   verdict on the GOOD diff: $(verdict "$T/rev_good.out")"
 ck "reviewer REJECTs the known-bad diff"  bash -c "verdict_line=\$(grep -m1 -E '^(APPROVE|REJECT)' '$T/rev_bad.out'); case \"\$verdict_line\" in REJECT*) exit 0;; *) echo \"got: \$verdict_line\"; exit 1;; esac"
 ck "reviewer APPROVEs the known-good diff" bash -c "verdict_line=\$(grep -m1 -E '^(APPROVE|REJECT)' '$T/rev_good.out'); case \"\$verdict_line\" in APPROVE*) exit 0;; *) echo \"got: \$verdict_line\"; exit 1;; esac"
 echo "== 4. no paid fallback"
-"$LAUNCH" run --model anthropic/claude-sonnet-4-5 "say hi" > "$T/paid.out" 2>&1; rc=$?
+"$LAUNCH" run --model anthropic/claude-sonnet-4-5 "say hi" > "$T/paid.out" 2>&1 < /dev/null; rc=$?
 echo "   anthropic attempt, what OpenCode said:"; tail -n 4 "$T/paid.out" | cut -c1-150 | sed 's/^/   > /'
 ck "OpenCode refuses a non-enabled provider (exit $rc, no Anthropic route)" bash -c "[ $rc -ne 0 ]"
 paid_code() { # paid_code PORT KEYFILE MODEL -> HTTP status of a chat request for that model, using the key that belongs to THAT guard
