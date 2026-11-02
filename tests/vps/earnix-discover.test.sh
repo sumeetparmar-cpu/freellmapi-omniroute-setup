@@ -50,4 +50,11 @@ env HOME="$T" SSH_BIN="$T/fakessh" EARNIX_ROOTS="$V" bash "$ROOT/vps/remote-surv
 t "wrapper runs the discovery and prints/saves it on the phone side" bash -c 'grep -q "first earnix commit" "$0" && ! grep -q PLANTED_SECRET "$0"' "$T/phone.txt"
 t "wrapper keeps a copy on the VPS side (falls back to HOME/llm-deploy when not root)" bash -c 'ls "$0"/llm-deploy/earnix-discovery-*.txt >/dev/null 2>&1 || ls /root/llm-deploy/earnix-discovery-*.txt >/dev/null 2>&1' "$T"
 rm -f /root/llm-deploy/earnix-discovery-*.txt 2>/dev/null
+echo "# placeholder guard and remembered login"
+t "a placeholder address is refused before any connection"  bash -c '! env HOME="$1" SSH_BIN="$1/fakessh" bash "$0/vps/remote-survey.sh" root@YOUR_REAL_ADDRESS --earnix 2>&1 | grep -q "connecting"; env HOME="$1" SSH_BIN="$1/fakessh" bash "$0/vps/remote-survey.sh" root@YOUR_REAL_ADDRESS --earnix 2>&1 | grep -q "placeholder"' "$ROOT" "$T"
+t "'last' with nothing remembered says so"                   bash -c 'env HOME="$1" LLM_VPS_TARGET_FILE="$1/none" SSH_BIN="$1/fakessh" bash "$0/vps/remote-survey.sh" last --earnix 2>&1 | grep -q "no remembered login"' "$ROOT" "$T"
+env HOME="$T" LLM_VPS_TARGET_FILE="$T/mem" SSH_BIN="$T/fakessh" EARNIX_ROOTS="$V" bash "$ROOT/vps/remote-survey.sh" real@203.0.113.9 --earnix --out "$T/p2.txt" > /dev/null 2>&1
+t "a successful run remembers the login (0600)"              bash -c '[ "$(cat "$0/mem")" = "real@203.0.113.9" ] && [ "$(stat -c %a "$0/mem")" = 600 ]' "$T"
+env HOME="$T" LLM_VPS_TARGET_FILE="$T/mem" SSH_BIN="$T/fakessh" EARNIX_ROOTS="$V" bash "$ROOT/vps/remote-survey.sh" last --earnix --out "$T/p3.txt" > "$T/p3.log" 2>&1
+t "'last' reuses it"                                         bash -c 'grep -q "using the remembered login: real@203.0.113.9" "$0" && grep -q "first earnix commit" "$1"' "$T/p3.log" "$T/p3.txt"
 echo "earnix-discover: passed=$PASS failed=$FAIL"; [ "$FAIL" -eq 0 ] || exit 1

@@ -7,6 +7,12 @@
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TARGET="${1:-}"; [ -n "$TARGET" ] || { sed -n '2,7p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 2; }; shift
+# "last" = the login that worked last time (only the user@host text is remembered, in a 0600 file; no password or key)
+MEM="${LLM_VPS_TARGET_FILE:-$HOME/.llm-vps-target}"
+if [ "$TARGET" = last ]; then TARGET="$(head -n1 "$MEM" 2>/dev/null)"; [ -n "$TARGET" ] || { echo "no remembered login yet: run once with your real user@host (for example root@203.0.113.10)" >&2; exit 2; }; echo "using the remembered login: $TARGET" >&2; fi
+case "$(printf '%s' "$TARGET" | tr 'A-Z' 'a-z')" in
+  *your_*|*real_address*|*vps_address*|*vps_ip*|*host_here*|*example.com*) echo "'$TARGET' is a placeholder from the instructions, not a real address. Use your real login, for example root@203.0.113.10 (the address you use to SSH into the VPS)." >&2; exit 2;;
+esac
 SSHARGS=(); FORENSIC=0; EARNIX=0; ONLY=""; FLP=3001; OMP=20128; CN=""; OUT="$HOME/vps-survey-$(date -u +%Y%m%dT%H%M%SZ).txt"
 while [ $# -gt 0 ]; do case "$1" in --port) SSHARGS+=(-p "$2"); shift;; --key) SSHARGS+=(-i "$2"); shift;; --out) OUT="$2"; shift;; --freellmapi-port) FLP="$2"; shift;; --omniroute-port) OMP="$2"; shift;; --inspect-container) CN="$2"; shift;; --forensic) FORENSIC=1;; --earnix) EARNIX=1;; --only) ONLY="$2"; shift;; *) echo "unknown option $1" >&2; exit 2;; esac; shift; done
 SSH="${SSH_BIN:-ssh}"
@@ -34,4 +40,5 @@ REMOTE="${REMOTE//@RUN@/$RUN}"; REMOTE="${REMOTE//@SAVE@/$SAVE}"; REMOTE="${REMO
 echo "connecting to $TARGET (read-only survey; report goes to $OUT)" >&2
 tar -C "$HERE" -cz vps config termux/lib 2>/dev/null | "$SSH" -o BatchMode=no -o ConnectTimeout=20 -o StrictHostKeyChecking=ask "${SSHARGS[@]}" "$TARGET" "$REMOTE" 2>&1 | tee "$OUT"
 rc=${PIPESTATUS[1]}; chmod 600 "$OUT" 2>/dev/null
+[ "$rc" = 0 ] && { ( umask 077; printf '%s\n' "$TARGET" > "$MEM" ) 2>/dev/null; }
 echo; echo "ssh exit status: $rc   (report: $OUT)" >&2; exit "$rc"
