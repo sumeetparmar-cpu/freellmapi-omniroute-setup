@@ -110,7 +110,7 @@ length argument (fixed); PowerShell treated redirected stdin as interactive (new
 
 ## VPS toolkit (`vps/`)
 
-Tested on a disposable Linux sandbox (Ubuntu 24.04 container, no systemd running, root). **Not run on a real VPS, not on Ubuntu 26.04.**
+Tested on a disposable Linux sandbox (Ubuntu 24.04 container, no systemd running, root). **Not run on a real VPS.** (Ubuntu 26.04 and real systemd are covered by CI, see the last section.)
 
 | Suite | Command | Result |
 |---|---|---|
@@ -124,4 +124,47 @@ What the real runs demonstrated (not just asserted): service users are system ac
 
 Defects found by these tests and fixed: service-user commands inherited the caller's working directory (on a real server that is `/root/llm-deploy`, mode 0700, so `git clone` and esbuild failed with 'Permission denied'): found by the first CI run of the end-to-end job on GitHub's runner, not by my sandbox; every service-user command now starts in its own directory (`env -C`), with a regression test and the rehearsal now starting from an inaccessible directory; the preflight's "propose a free port" call passed the alternatives as one argument (proposed nothing); `act` did not abort when a step failed, so a failed checksum would not have stopped the install (now every failed step ends the run); `systemd-analyze verify` rejects a temp file without a `.service` suffix, which would have broken the `units` step; the static safety scan initially matched nothing at line start or inside `act "…" cmd` calls (caught by a planted-violation meta-test, now fixed).
 
-Not verifiable here: Ubuntu 26.04; real systemd start/stop/restart/cgroup limits/`KillMode` (units are checked with `systemd-analyze verify` and unit-tested only; the rehearsal used `LLM_NO_SYSTEMD=1`, and its preflight "no systemd" blocker was overridden on purpose because the container has none); behaviour next to real Docker/Caddy/n8n/SUPPAR/EARNIX (docker and systemctl are shims in Part A); the Hostinger environment (CPU, RAM, disk, existing ports); Windows and Android for anything in `vps/`.
+Not verifiable in the sandbox (CI now covers Ubuntu 26.04 and real systemd for the guard/audit units, see the last section; the *gateway* units' cgroup limits/`KillMode` remain unproven because the rehearsal uses `LLM_NO_SYSTEMD=1`, and its preflight "no systemd" blocker was overridden on purpose because the container has none); behaviour next to real Docker/Caddy/n8n/SUPPAR/EARNIX (docker and systemctl are shims in Part A); the Hostinger environment (CPU, RAM, disk, existing ports); Windows and Android for anything in `vps/`.
+
+## Free-only layer (added 2026-10-30)
+
+Environment: Ubuntu 24.04 container, Node 24.22.2 (from the npm registry), FreeLLMAPI v0.16.12 (`36826e7`) and `omniroute@3.8.52` installed with this toolkit's own installers and run side by side.
+
+| What | Command | Result |
+|---|---|---|
+| Guard + policy CLI against loopback mocks (policy, params, routes, rate limit, cooldown, daily cap, restart recovery, kill switch, audit/apply, custom nodes, secret canary) | `node --test tests/guard/*.test.mjs` | **66 passed, 0 failed** (incl. quota suite; guard/policy/security/fuzz/status) |
+| Adversarial bypass suite, asserting what the UPSTREAM received (40 bad model strings, 28 route/path tricks, header stripping, Host rebinding, smuggling, content types, client keys, in-flight cap, crash/restart quota) | included above (`tests/guard/security.test.mjs`) | **12 passed** |
+| VPS unit rendering (dry-run default, 6 units, loopback, users, client keys, sandboxing, no secrets, port clash) | `bash tests/vps/free-install.test.sh` | **24 passed, 0 failed** (incl. client-key downgrade/missing-file safety rails) |
+| Privileged VPS suite in this disposable container (real throw-away users, dirs, units, update + rollback, purge) | `sudo LLM_TEST_ALLOW_SYSTEM_CHANGES=1 bash tests/vps/run-tests.sh` | **132 passed, 0 failed**; no users/dirs left behind |
+| Release archive verified from a clean extraction with the pinned Node 24.11.0 | `scripts/make-release.sh --verify` | all suites pass; checksum verified |
+| `systemd-analyze verify` + `security --offline` on the new units (with stand-in binaries) | local | verify passes; exposure 2.9 OK (existing gateway unit: 3.0) |
+| ShellCheck over all shell scripts | as CI | clean |
+| `free-policy freellmapi apply` on a real fresh FreeLLMAPI | live | 97 enabled models -> **43**, 0 violations (54 non-free disabled, nothing enabled/deleted) |
+| **Real inference**: guard -> FreeLLMAPI -> OVH anonymous tier (`gpt-oss-20b`, `max_tokens=16`, 1 request, ₹0) | live, through the session proxy | genuine completion with token usage (not a mock) |
+| Live negatives through the same stack: `gpt-4o`, Cloudflare `kimi-k2.6`, OpenRouter `owl-alpha`, `models[]` fallback, `web_search` tool, `/v1/images`, `/api/keys` | live | all 403 from the guard; the OVH request counter stayed at 1 |
+| OmniRoute path, keyless: client -> guard (client key) -> OmniRoute 3.8.52 -> OVH anonymous via a custom node (`ovhanon`), connection with NO api key | live | **genuine completion ("pong") with provider token usage**; `ovhanon/gpt-4o`, unknown prefixes, paid models and `auto` blocked |
+| Audit of a suspicious OmniRoute custom node | live | flagged, kill flag set; removed -> flag cleared |
+| Direct-access bypass: gateway key through the guard / guard key against each gateway | live | both 401 |
+
+**Not tested (blocked):** real inference for Groq/Gemini/Mistral/OpenRouter/Cloudflare through either gateway (no keys supplied), the *gateway* units under real systemd, and anything on the VPS (not accessed). Ubuntu 26.04 and the guard/audit systemd path are verified in CI (below), not in this sandbox.
+
+### Real systemd and Ubuntu 26.04 (CI)
+
+`tests/vps/systemd-guard.test.sh` runs in CI on `ubuntu-24.04` **and** `ubuntu-26.04` (GitHub-hosted, real systemd). It installs the guard/audit units through `vps/free-install.sh` with throw-away users and checks: the units run as their gateway's user with
+`NoNewPrivileges`/`ProtectSystem=strict`; a *root* probe inside the unit's sandbox cannot write `/usr`, `/etc`, the other gateway's directory or the toolkit and cannot see home directories; client key required, paid model/route blocked, the gateway receives the upstream key and no
+routing header; `kill -9` => automatic restart with a new PID and the daily counter intact; `systemctl stop` with a never-ending stream open finishes inside the drain window; audit failure => kill flag => 503 => fix => flag cleared => inference resumes; FreeLLMAPI audit
+auto-fixes drift (disable-only); the two guards are independent (stopping one leaves the other serving, separate state files); `monitor.sh` reports the real units; `free-install remove` deletes only the named gateway's units. The existing privileged suite and the end-to-end rehearsal
+also run on both images. The test refuses to run unless root, flagged, systemd is PID 1 and no `llm-guard-*` unit exists.
+
+### Latest CI evidence (head `ffc8097`, 2026-10-30)
+
+Both the `push` and `pull_request` runs of the `toolkit-tests` workflow finished **success**: `linux`, `systemd-guard`, `vps-privileged` and `vps-e2e` on `ubuntu-24.04` **and** `ubuntu-26.04`, plus `windows`. Along the way CI exposed two flaws in this project's own tests (the non-root fallback of `free-install.test.sh`, and a root-probe design error in `systemd-guard.test.sh`); both were reproduced and fixed in the tests, with no assertion weakened.
+Additional local-only checks: a deterministic 400-request fuzz test whose invariant ("everything that reaches the gateway is policy-compliant") was mutation-checked, a live re-run of real keyless inference through both gateways on the final code, and `tests/vps/guard-backup.test.sh` (16) / `tests/vps/monitor-guard.test.sh` (9).
+
+### Interrupted installs and partial failures (`tests/vps/partial-failure.test.sh`)
+
+33 checks in an isolated temp tree (root only for the `chown` parts; otherwise reported as SKIP): backups (tar failing, silently truncating, SIGKILLed mid-write, a newer corrupt archive), the FreeLLMAPI install from a tiny local git repo (killed clone, HEAD without a tree, unreachable repo then success, failing build), the Node runtime against a local server that truncates / corrupts / stalls the download (plus SIGKILL mid-download, killed-before-chmod, stale temp dirs, dry-run), and the toolkit swap crash state.
+**Mutation check:** with the three source fixes reverted, 15 of the 33 fail; with them, 33/33 pass. Defects it found and fixed: `backup_paths` ignored `tar`'s exit status and wrote straight to the final name; `latest_backup` could choose a corrupt archive; `_node_install` did not repair ownership/modes of an existing directory; killed downloads left temp dirs; a partial `git clone` was mistaken for a finished one. Test-harness lessons recorded: never pipe a long-running command into `grep -q` (SIGPIPE kills it), and a crash simulation must kill the whole process tree, script first.
+
+### Gateway units under real systemd (`tests/vps/e2e-systemd.sh`, CI job `e2e-systemd`)
+Real `deploy.sh --apply` (pinned Node download, both gateway installs as their own users) with systemd in charge; 63 checks per image on ubuntu-24.04 (systemd 255) and ubuntu-26.04 (systemd 259), green at head `92836e5`. Refuses to run unless root, `LLM_TEST_ALLOW_SYSTEM_CHANGES=1`, systemd is PID 1 and no `llm-*` gateway unit exists. It found one real defect (gwctl returned before the restarted gateway answered; fixed) and exposed flaws in my own harness (see PROGRESS.md). The crash-loop assertion checks behaviour (unit `failed`, start-limit refusal in the journal, no respawn), not systemd's `Result` string, which differs across versions. This is CI evidence on GitHub runners, not VPS validation.

@@ -33,7 +33,9 @@ with_stopped() { # with_stopped cmd... : stop if running, run, restart if it was
   local was=0 rc; is_active && was=1
   [ "$was" = 1 ] && { info "stopping $GW for a consistent operation"; svc stop || true; }
   "$@"; rc=$?
-  if [ "$was" = 1 ]; then info "starting $GW again"; svc start || { err "could not restart $GW"; rc=1; }; fi
+  if [ "$was" = 1 ]; then info "starting $GW again"; svc start || { err "could not restart $GW"; rc=1; }
+    healthy 120 || { warn "$GW restarted but is not healthy yet (see: gwctl.sh $GW logs)"; [ "$rc" -ne 0 ] || rc=1; }
+  fi
   return $rc
 }
 

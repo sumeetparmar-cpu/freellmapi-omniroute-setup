@@ -49,6 +49,22 @@ for gw in freellmapi omniroute; do
   lg="$(gw_home "$gw")/logs"; if [ -d "$lg" ] && [ -r "$lg" ]; then sz=$(du -sm "$lg" 2>/dev/null | cut -f1); [ "${sz:-0}" -gt "${MON_LOG_WARN_MB:-500}" ] && rec 1 "$gw.logs" "${sz} MB of logs" || rec 0 "$gw.logs" "${sz:-0} MB"; fi
 done
 
+# free-only guard + audit (only for gateways whose guard unit has been installed with vps/free-install.sh)
+NODE_BIN="$LLM_ROOT/runtime/node/bin/node"; [ -x "$NODE_BIN" ] || NODE_BIN="$(command -v node || true)"
+for gw in freellmapi omniroute; do
+  gu="llm-guard-$gw.service"; [ -f "$SYSTEMD_DIR/$gu" ] || continue
+  if [ -d "$SYSTEMD_RUN_DIR" ]; then
+    st="$(systemctl is-active "$gu" 2>/dev/null)"; [ "$st" = active ] && rec 0 "$gw.guard.unit" "active" || rec 2 "$gw.guard.unit" "$st"
+    systemctl is-failed --quiet "llm-free-audit-$gw.service" 2>/dev/null && rec 1 "$gw.audit" "last audit run FAILED (see journalctl -u llm-free-audit-$gw.service)" || rec 0 "$gw.audit" "last run ok / not yet run"
+  fi
+  gport="$(grep -oE -- '--listen 127\.0\.0\.1:[0-9]+' "$SYSTEMD_DIR/$gu" | head -n1 | grep -oE '[0-9]+$')"
+  if [ -n "$NODE_BIN" ] && [ -n "$gport" ]; then
+    while IFS=$'\t' read -r lv nm dt; do
+      case "$lv" in OK) l=0;; WARN) l=1;; *) l=2;; esac; rec "$l" "$gw.guard.$nm" "$dt"
+    done < <("$NODE_BIN" "$HERE/../tools/free-status.mjs" --url "http://127.0.0.1:$gport" 2>/dev/null)
+  else rec 1 "$gw.guard" "cannot check (no node binary or guard port unknown)"; fi
+done
+
 # output
 if [ "$JSON" = 1 ]; then
   printf '{"time":"%s","host":"%s","status":"%s","checks":[' "$(date -u +%FT%TZ)" "$(hostname)" "$(lvl $WORST)"
