@@ -22,7 +22,11 @@ SAVE=""; [ "$FORENSIC" = 1 ] && SAVE="/root/llm-deploy/vps-forensic-$TS.txt"
 IFS= read -r -d '' REMOTE <<'R' || true
 set -e; D=$(mktemp -d /tmp/llm-survey.XXXXXX); chmod 700 "$D"; trap 'rm -rf "$D"' EXIT; tar -xz -C "$D"
 SAVE='@SAVE@'
-if [ -n "$SAVE" ]; then umask 077; mkdir -p /root/llm-deploy; chmod 700 /root/llm-deploy; set -o pipefail; bash "$D/vps/survey-remote.sh" "$D" @ARGS@ 2>&1 | tee "$SAVE"; echo "report also saved on the VPS: $SAVE"
+if [ -n "$SAVE" ]; then
+  # Normally /root/llm-deploy (root login). A non-root login falls back to its own $HOME/llm-deploy; if neither is writable, no copy is kept (the survey still runs).
+  sd=$(dirname "$SAVE"); ( umask 077; mkdir -p "$sd" ) 2>/dev/null || { sd="$HOME/llm-deploy"; SAVE="$sd/$(basename "$SAVE")"; ( umask 077; mkdir -p "$sd" ) 2>/dev/null; }
+  if [ -d "$sd" ] && [ -w "$sd" ]; then chmod 700 "$sd" 2>/dev/null; ( umask 077; set -o pipefail; bash "$D/vps/survey-remote.sh" "$D" @ARGS@ 2>&1 | tee "$SAVE" ); echo "report also saved on the VPS: $SAVE"
+  else echo "note: no writable llm-deploy directory; this report is NOT saved on the VPS"; bash "$D/vps/survey-remote.sh" "$D" @ARGS@; fi
 else bash "$D/vps/survey-remote.sh" "$D" @ARGS@; fi
 R
 REMOTE="${REMOTE//@SAVE@/$SAVE}"; REMOTE="${REMOTE//@ARGS@/$FLP $OMP ${CN:-none} ${ONLY:-both}}"
