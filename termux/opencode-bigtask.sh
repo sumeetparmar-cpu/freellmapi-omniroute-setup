@@ -80,7 +80,7 @@ printf '{ "permission": { "edit": "allow", "bash": "allow" } }\n' > opencode.jso
 git add -A; git commit -q -m baseline
 echo "project: $P"
 if node --test >/dev/null 2>&1; then die "baseline unexpectedly passes: fixture is wrong"; fi
-echo "baseline: $(node --test 2>&1 | grep -E '^# (pass|fail)' | tr '\n' ' ')   (must fail before the task)"
+echo "baseline: $(node --test 2>&1 | grep -E '^(# |ℹ )(pass|fail)' | tr '\n' ' ')   (must fail before the task)"
 [ "${BIGTASK_SETUP_ONLY:-0}" = 1 ] && exit 0
 [ -x "$LAUNCH" ] || die "OpenCode is not set up: run bash $HERE/opencode-install.sh"
 bash "$HERE/gateways.sh" start >/dev/null || die "gateways did not start: bash $HERE/gateways.sh doctor"
@@ -95,8 +95,9 @@ pass=0; fail=0
 ck() { if "${@:2}" >/dev/null 2>&1; then pass=$((pass + 1)); echo "PASS  $1"; else fail=$((fail + 1)); echo "FAIL  $1"; fi; }
 ck "all tests pass (node --test, run by this script)" node --test
 ck "test files untouched" bash -c '[ -z "$(git status --porcelain -- test)" ]'
+ck "nothing outside src/ was changed (the task said: only src/)" bash -c '[ -z "$(git status --porcelain | grep -v " src/")" ]'
 ck "at least 3 source files changed" bash -c '[ "$(git status --porcelain -- src | wc -l)" -ge 3 ]'
-echo "-- node --test now: $(node --test 2>&1 | grep -E '^# (pass|fail)' | tr '\n' ' ')"
+echo "-- node --test now: $(node --test 2>&1 | grep -E '^(# |ℹ )(pass|fail)' | tr '\n' ' ')"
 bash "$HERE/gateways.sh" usage
 echo "== bigtask: $pass passed, $fail failed   (project kept at $P)"
 [ "$fail" -eq 0 ]
