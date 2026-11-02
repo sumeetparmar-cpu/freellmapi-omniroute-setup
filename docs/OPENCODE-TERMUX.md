@@ -65,3 +65,7 @@ Honest summary: it works end to end and costs nothing, but expect the small open
 ## Troubleshooting: `UnknownError: Unexpected server error ... "ref": "err_xxxxxxxx"`
 
 This is OpenCode's own generic error when the model or provider you asked for is not an enabled provider. It is NOT a gateway, guard or OVH fault: nothing reaches the guard, so no guard or gateway log mentions the `err_` ref. Confirmed on the phone: `-m freeLLMapi/gpt-oss-20b` (wrong capitalization) fails with this error, while `-m freellmapi/gpt-oss-20b` returns the answer through the guard. Provider ids are lowercase and case-sensitive: `freellmapi/gpt-oss-20b`, `omniroute/ovhanon/gpt-oss-120b`.
+
+## FreeLLMAPI 20B and absolute paths (measured on the phone)
+
+Without a hint the 20B model builds a wrong absolute path for its first Read; OpenCode rejects it (`external_directory`, auto-reject) and the task fails (2 of 2 runs, different wrong paths). With the hint `Only use the relative path math.js; never type an absolute path.` (`ACCEPT_ONLY_FL=1 ACCEPT_FL_HINT=... bash termux/opencode-accept.sh`) the same toy task passed once (`node --test` green, `math.js` changed). That is a single run on a toy task: the 120B (`omniroute/ovhanon/gpt-oss-120b`) remains the coding model; the 20B is the background model.
