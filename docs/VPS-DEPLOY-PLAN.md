@@ -1,99 +1,94 @@
-# VPS deployment plan (DRAFT: prepared before the survey output was seen; nothing here has been run on the VPS)
+# VPS deployment plan: ARCHITECTURE C FIRST (OmniRoute + its guard, OVH anonymous inference only)
 
-Inputs reported by the VPS owner (NOT verified by this repo's tools yet): root SSH works; Ubuntu 26.04.1 LTS; `127.0.0.1:3001` is already published by an existing Docker container (docker-proxy PID 2177) that must not be stopped, restarted, modified, removed or recreated.
+Status: PREPARATION ONLY. Nothing in this document has been run on the VPS. Deployment needs the owner's explicit approval at each gate (G0-G8 below). Facts about the VPS come from the owner's forensic report summary; measurements marked "cloud" were taken on an x86_64 Linux sandbox with the same pinned Node and OmniRoute versions, NOT on the VPS.
 
-## Port map (toolkit only; the existing container keeps 3001)
-| Component | Port | Bind | Why |
-|---|---|---|---|
-| FreeLLMAPI | **13001** | 127.0.0.1 | 3001 is taken by the existing container; 13001 is in the toolkit's own alternative list |
-| OmniRoute | 20128 | 127.0.0.1 | unchanged |
-| FreeLLMAPI guard | 3101 | 127.0.0.1 | unchanged |
-| OmniRoute guard | 20228 | 127.0.0.1 | unchanged |
+## 1. Decision and architecture
+Owner's decision after the forensic inspection: architecture **C**.
+* Deploy: **OmniRoute 3.8.52** (loopback `127.0.0.1:20128`) + its **free-only guard** (`127.0.0.1:20228`) as isolated systemd units under their own user `llmomni` and `/srv/llm`.
+* Inference: the keyless OVH anonymous route only (custom OpenAI-compatible node prefix `ovhanon` + ONE keyless connection, `termux/lib/provision.mjs omniroute`, proven on the phone: OmniRoute 120B fixed both phone coding tasks). No API key, no account, no paid provider, no fallback; the guard allowlist refuses any other model (HTTP 403).
+* NOT deployed now: a second FreeLLMAPI (future optional stage, section 9). The existing `suppar-freellmapi` container (v0.16.10, `127.0.0.1:3001`, 384 MiB limit, `/opt/suppar-tools/freellmapi`, volume `freellmapi-data`) is not touched, not reused, not referenced.
+* Every listener binds 127.0.0.1 (verified in the units, `deploy.sh` config, guard `--listen`; CI test `e2e-systemd` checks loopback binding of the gateways).
 
-How 13001 reaches everything without editing defaults (the shared defaults stay 3001 so the phone setup and CI tests are untouched): `deploy.sh --freellmapi-port 13001` writes `PORT_FREELLMAPI=13001` to `/srv/llm/deploy.conf`; the gateway unit, the guard's upstream (`free-install.sh` reads the same file), `verify.sh` and `monitor.sh` all read that file. `preflight.sh --freellmapi-port 13001` checks it first.
+### Code changes made for C (this repo, CI-tested, nothing deployed)
+* `--only omniroute` for `deploy.sh` and `preflight.sh`; the choice is persisted as `GATEWAYS=omniroute` in `/srv/llm/deploy.conf`, and `free-install.sh`, `verify.sh`, `monitor.sh` read it, so FreeLLMAPI is never created (no `llmfree` user, no `/srv/llm/freellmapi`), installed, enabled, verified, monitored or port-checked (port 3001 is not even looked at). Installing/enabling the unselected gateway is refused. Default (both gateways) behaviour is unchanged. 17 new tests (`tests/vps/only-omniroute.test.sh`) + the 99 existing VPS tests pass.
+* `OOMScoreAdjust=500` added to the gateway and guard units: if the host ever runs out of memory (0 swap, Ollama ~3.5 GiB), the kernel picks the toolkit's processes before Ollama/n8n/SUPPAR.
+* The survey now also reports n8n/5678 exposure and a CPU/load sample (`--forensic`).
 
-## Read-only step now (one command from the phone, nothing written on the VPS except a temp dir that is deleted)
-```
-bash vps/remote-survey.sh root@VPS_ADDRESS --freellmapi-port 13001 --omniroute-port 20128
-```
-Reports: OS/RAM/disk, listeners (bind addresses of 13001/20128/3101/20228/3001), running services, **who owns port 3001** (container name, image, status, port mappings, compose project/service/working dir/config files, restart policy, memory limit: labels and state only, no environment variables), firewall listing, the toolkit preflight with the 13001 port, and an inventory snapshot. Required result before anything else: `RESULT: PASS` (warnings reviewed) and 13001/20128/3101/20228 free.
-
-## Strategy decision: reuse the existing FreeLLMAPI (A) or a second instance on 13001 (B)?
-Reported by the owner (not verified by this repo): Ubuntu 26.04.1, 2 CPUs, RAM 7,935 MB total / 2,523 MB available, swap 0, disk free 16 GB, load 1.98, 10 containers / 17 volumes, nft firewall active; container `suppar-freellmapi` Up 4 days (healthy) on `127.0.0.1:3001`, Compose file `/opt/suppar-tools/freellmapi/docker-compose.yml`; 13001/20128/3101/20228 free.
-
-**What the repo's scripts/units prove about reuse (verified in code):**
-* `deploy.sh config` refuses a port that is already in use by something else, and the guard + audit units are rendered for `/srv/llm/<gw>` with the service user `llmfree`, an upstream key file `free-guard.upstream.key` and `free-audit.env` credentials. There is no "attach to an existing gateway" mode: reuse needs new code, not just a flag.
-* The audit unit for FreeLLMAPI runs with `--auto-fix`: it logs in with admin credentials and DISABLES models it cannot verify as free. Pointed at the existing instance, that would change SUPPAR's own gateway settings (models SUPPAR may rely on).
-* Zero-cost OVH inference needs a custom endpoint added inside the gateway (its database). Doing that on the existing instance modifies a production service's data.
-* The guard itself only needs an HTTP upstream (127.0.0.1:3001 would be reachable from the host, since the container publishes to loopback), so the proxy part would technically work; the surrounding provisioning/audit does not.
-
-**Comparison (resource figures are CI measurements and the units' caps, NOT measurements on this VPS):**
-| | A: reuse :3001 behind guard | B: second FreeLLMAPI on :13001 |
+## 2. Resource budget (exact where measured)
+Host (owner-reported): 2 CPUs, 7,935 MB RAM, 2,523 MB available, 0 swap, 16 GB disk free, load 1.98. Neighbours: Ollama ~3.53 GiB, n8n ~488 MiB.
+| Item | Measurement (cloud x86_64, Node 24.11, OmniRoute 3.8.52) | Cap in the unit |
 |---|---|---|
-| Existing services touched | yes: needs the production gateway's admin credentials, a new custom endpoint in its DB, audit `--auto-fix` may disable models SUPPAR uses | no |
-| Extra RAM (FreeLLMAPI part) | ~0 | ~65-81 MiB resident (CI), cap `MemoryMax` per unit file |
-| Whole new stack RAM | OmniRoute ~705-712 MiB + 2 guards | + FreeLLMAPI ~65-81 MiB; ~0.9 GiB typical, ~1.2 GiB at the unit caps, against 2,523 MB available and no swap |
-| Disk | OmniRoute + guards | + one FreeLLMAPI install (preflight requires >= 6 GB free; 16 GB reported) |
-| Scripts support it today | no (needs code + approval) | yes (`--freellmapi-port 13001`, tested in CI) |
-| Blast radius if it goes wrong | SUPPAR's gateway | only `/srv/llm` services |
+| OmniRoute RAM idle | 557 MiB (2 processes) | `MemoryHigh` 1536M, `MemoryMax` 2G |
+| OmniRoute after 2 real requests | 586 MiB | same |
+| OmniRoute under systemd (CI, earlier) | 704-712 MiB | same |
+| OmniRoute guard | 58-59 MiB | `MemoryMax` 192M |
+| CPU idle | about 1% of one core | `CPUQuota` 80% |
+| **Steady state total** | **about 0.62-0.78 GiB** (use 0.8 GiB for planning) | |
+| Disk: OmniRoute install | 2,804 MB (`node_modules` 2,803 MB) | |
+| Disk: npm cache during install | up to 1,238 MB in the cloud run (under `/srv/llm/omniroute/home/.npm`; can be deleted after install) | |
+| Disk: pinned Node runtime | about 190-200 MB | |
+| Disk: data/logs/state | under 10 MB at start | |
+| **Disk total** | **about 3.0 GB after cache cleanup, about 4.3 GB peak** (preflight requires >= 6 GB free; 16 GB reported) | |
+| **Install (measured, cloud, `omniroute.sh install` with the pinned 3.8.52)** | peak **1,374 MiB** (sum of node + npm RSS, 1 s sampling), wall time **about 137 s** on a fast link, exit 0, no `node-gyp` activity (prebuilt binaries used) | scope cap `INSTALL_MEM_MAX` (default 2G) |
+**Headroom (computed from the owner's figures, not measured on the VPS):** 2,523 MB available - about 800 MB steady = about 1.7 GB left for Ollama growth and n8n bursts. This is acceptable only because the units are capped, `OOMScoreAdjust=500` makes them the first victim, and the install is run with a memory cap (below). No swap means there is no cushion: do not start G4 unless `MemAvailable` is at least 2.5 GB at that moment (install peak 1.37 GiB measured in the cloud). Ollama releases its model memory when idle (default keep-alive 5 minutes), so a quieter moment may show more, but that is not verified for this VPS.
 
-**Recommendation: B**, because A saves only ~65-81 MiB of RAM (about 3% of the available memory) but is the only option that modifies a service that is working. Even lower resource option, if wanted: **C, OmniRoute + its guard only** (OmniRoute alone reaches OVH anonymous through the `ovhanon` node), skipping the second FreeLLMAPI. Reuse is preferred wherever it is technically safe: the existing Docker daemon, Caddy and the system tools are reused unchanged (the toolkit installs its own pinned Node under `/srv/llm`, never system packages). The existing FreeLLMAPI container stays exactly as it is.
+## 3. Is the system suitable right now? (n8n CPU 97.35%)
+Verified: load average 1.98 on 2 CPUs means both cores were close to saturated at inspection time, and n8n's single `docker stats` sample read 97.35% (of one core). I cannot see why from here: a single sample is not a measurement (docker's one-shot CPU figure covers a very short window and can catch a burst such as a running workflow, a scheduled trigger, an execution backlog or an update). Likely candidates, unverified: a long-running or looping workflow, a polling trigger, or the task runner busy. The survey now includes a 3-sample CPU table, two `docker stats` samples, `vmstat` and kernel pressure (PSI) so the answer is evidence, not a guess.
+**Decision rule for G4:** do not start the install while the 1-minute load average is above 1.5 on these 2 CPUs or CPU pressure (`/proc/pressure/cpu` `some avg60`) is above about 20; wait for a quiet period. The install is niced (19), idle I/O class and in a systemd scope with `CPUWeight=20`, so SUPPAR/n8n win under contention, but a saturated 2-CPU box makes the npm install slow (it is mostly network + file writes) and risks timeouts in n8n workflows meanwhile. Steady-state use is negligible CPU (about 1% idle; inference is remote at OVH).
 
-**Practical risks for B (reasoned from the reported numbers, to be confirmed by the survey):** load 1.98 on 2 CPUs means installs (npm build) compete with SUPPAR; each unit has `CPUQuota=80%`, installs are niced, and the first install should run in a quiet period. 0 swap means a memory spike is fatal for something: the units have `MemoryMax` so the kernel kills the toolkit's service, not your containers, but the install step should only start with comfortable headroom (>= ~1.5 GiB available). The two warnings are unknown until the report text is seen.
+## 4. Security assessment
+* **Network**: OmniRoute, its guard: loopback only; no firewall change needed or made; no Caddy change; first use through an SSH tunnel. Docker containers cannot reach the host's `127.0.0.1` (known limitation: SUPPAR/EARNIX/n8n would need a separate, separately approved route to call the guard).
+* **Isolation**: own system user (no login shell, no sudo, no docker group), own `/srv/llm` tree 0700, systemd sandbox (`NoNewPrivileges`, `ProtectSystem=strict`, `ReadWritePaths` limited, `RestrictAddressFamilies`), `MemoryMax`/`CPUQuota`/`TasksMax`.
+* **Free-only**: guard allowlist (only OVH models), per-model rate limit (2/min), client keys (the upstream OmniRoute key never leaves the guard), audit timer + kill switch. No provider key is ever entered.
+* **Data sent to OVH**: prompts go to OVH's anonymous endpoint (no account); do not send secrets or customer data.
+* **Residual**: OVH's anonymous tier has no SLA and may change; first-run account creation in OmniRoute (do the tunnel step before anything else is exposed); the toolchain warning (section 7).
+* **n8n 5678**: separate finding, see `docs/VPS-N8N-EXPOSURE.md`; not changed by this plan.
 
-**Evidence still needed from the VPS (one read-only command; adds the container inspection, no env values, no file contents beyond a masked compose structure):**
-```
-bash vps/remote-survey.sh root@VPS_ADDRESS --freellmapi-port 13001 --omniroute-port 20128 --inspect-container suppar-freellmapi
-```
-It reports: image/tag/created, health, restart policy, memory/CPU limits, user, networks, port mappings, mounts, env var NAMES only, compose labels, health endpoint status codes, `docker stats` (all containers), `docker system df`, and the compose structure with environment blocks and key/token/secret/password lines hidden. What it cannot learn without admin credentials: which providers/keys the existing instance has configured (deliberately not read).
-
-## Three-way architecture comparison (A reuse / B second FreeLLMAPI :13001 / C OmniRoute + guard only)
-Evidence level: reasoning from the repo's scripts and the owner-reported VPS facts. NOT yet backed by the container inspection (run `--forensic`, below). CI resource numbers are not VPS measurements.
-| Criterion | A reuse :3001 | B second :13001 | C OmniRoute + guard only |
-|---|---|---|---|
-| Security isolation | worst: shares a production gateway's DB and admin account | good: own user, own dir, own units | best: no second FreeLLMAPI at all |
-| SUPPAR compatibility | risk: audit `--auto-fix` may disable models SUPPAR uses; custom endpoint changes its DB | no interaction (own port, own data) | no interaction |
-| RAM | ~0 extra for FreeLLMAPI | + one FreeLLMAPI (CI: ~65-81 MiB RSS) | OmniRoute (CI ~705-712 MiB) + 1 guard |
-| Disk | OmniRoute + guards | + one FreeLLMAPI install | OmniRoute + 1 guard (smallest) |
-| Operational complexity | highest (needs new attach code, admin credentials of production) | medium (supported path) | lowest (one gateway to run and update) |
-| Reliability | coupled to SUPPAR's container lifecycle | independent units, `kill -9` recovery CI-tested | independent, fewest moving parts |
-| Zero-cost inference (OVH anonymous) | needs a change inside SUPPAR's gateway | yes (provisioning as on the phone) | yes (OmniRoute `ovhanon` custom node, proven on the phone) |
-| Maintenance | two things to keep compatible with SUPPAR | two gateways to update | one gateway |
-**Provisional recommendation: C if you only need the free OVH route on the VPS, B if you also want FreeLLMAPI there; never A.** The deciding facts (resource headroom on the real VPS, what the existing container is, the remaining warning) come from the forensic run.
-
-## Forensic run: ONE command from Termux (read-only except one report file under `/root/llm-deploy/`)
-```
-cd ~/freellmapi-omniroute-setup && git pull -q && bash vps/remote-survey.sh root@YOUR_REAL_ADDRESS --forensic --freellmapi-port 13001 --omniroute-port 20128
-```
-`--forensic` inspects `suppar-freellmapi` (override with `--inspect-container NAME`) and saves the whole report BOTH on the VPS (`/root/llm-deploy/vps-forensic-<UTC timestamp>.txt`, directory 0700, file 0600) and on the phone (`~/vps-survey-<timestamp>.txt`). Covers: container id/image/digest/version labels/health/restart/limits/user/networks/ports/mounts, env var NAMES only, compose project/service/working dir/config files, masked compose structure, health endpoint codes, per-container CPU/RAM, docker disk usage, host CPU/load/RAM/swap/disk, n8n/SUPPAR/EARNIX/Caddy/database containers and host services, non-loopback listeners and non-loopback docker ports, firewall listing, the preflight with port 13001, an inventory snapshot, and the exact preflight WARN/BLOCK lines. The only write on the VPS is the report file (plus a temp dir deleted at the end).
-
-## Finding from auditing the scripts: the survey does not create the deploy gate files
-`remote-survey.sh` runs the preflight and inventory in a temp dir on the VPS and deletes it, so nothing is left behind (by design). But `deploy.sh users` (the first changing step) refuses to run unless `--preflight FILE` says `RESULT: PASS*`, is from this host and newer than 24 h, and `--baseline FILE` exists. So Stage A/B of `docs/VPS-DEPLOYMENT.md` must still be done once on the VPS: copy the verified release archive, extract it, run `preflight.sh --freellmapi-port 13001 --omniroute-port 20128 --out /root/llm-deploy/preflight.txt` and `inventory.sh snapshot ... --out /root/llm-deploy/baseline.snap`. These write only under `/root/llm-deploy/` (mode 0600). The survey result is evidence for the decision, not a substitute for those files.
-
-## Approval-gated execution plan (exact commands from `docs/VPS-DEPLOYMENT.md`, with the VPS-specific ports)
-Nothing below has been run. Each gate is a separate "yes" from you; a failing step aborts the run.
-| Gate | What | Writes to |
+## 5. Deployment (each gate = a separate explicit "yes"; dry run first at every changing step)
+All commands run on the VPS as root from the extracted release archive (`/root/llm-deploy/llm-toolkit` below).
+| Gate | Command(s) | Writes to |
 |---|---|---|
-| G0 (prerequisite) | **Hostinger snapshot** in hPanel. I cannot verify your plan has one. No snapshot, no G3+. | Hostinger side only |
-| G1 | Stage A: on a computer, `scripts/make-release.sh --out release --verify` at a CI-green commit, `scp` the `.tar.gz` and `.sha256` to `/root/`; on the VPS `sha256sum -c`. No GitHub credentials on the VPS. | `/root/` (two files) |
-| G1 | Stage B: extract to `/root/llm-deploy`, run `./vps/preflight.sh --freellmapi-port 13001 --omniroute-port 20128 --out /root/llm-deploy/preflight.txt` and `./vps/inventory.sh snapshot --out /root/llm-deploy/baseline.snap --hash /etc/caddy/Caddyfile --hash <each compose/config file> --watch <n8n, SUPPAR, EARNIX data dirs>` (paths from the survey's Docker section) | `/root/llm-deploy/*` only |
-| G3 | Dry run first: `./vps/deploy.sh prepare --preflight ... --baseline ... --freellmapi-port 13001 --omniroute-port 20128` (prints what it would do), then the same with `--apply`: users `llmfree`/`llmomni` (no login/sudo/docker group), `/srv/llm` layout, pinned Node 24.11.0 (sha256-verified), toolkit copy, `deploy.conf` + `gateways.env` with `PORT_FREELLMAPI=13001`, `BIND_HOST=127.0.0.1` | `/srv/llm`, two new users |
-| G4 | `deploy.sh --apply install freellmapi`, `install omniroute`, `units` (renders, verifies with `systemd-analyze`, installs the two unit files, starts nothing) | `/srv/llm/<gw>`, `/etc/systemd/system/llm-freellmapi.service`, `llm-omniroute.service` |
-| G5 | `deploy.sh --apply enable freellmapi --baseline ...`, then `enable omniroute --baseline ...` (health wait 120 s + `verify.sh`; a failing service is disabled again automatically) | systemd enablement of our two units |
-| G6 | First use over an SSH tunnel: claim the FreeLLMAPI dashboard account before anything else can; configure OVH anonymous (custom endpoint, no keys) | gateway data under `/srv/llm` |
-| G8 | Guards: `free-install.sh` dry-run, then apply: `llm-guard@` units on 3101/20228 forwarding to 13001/20128, audit timer, kill switch | `/etc/systemd/system/llm-guard*`, `llm-free-audit*` |
-| later | OpenCode on the VPS (optional), same two-provider config pointing at 3101/20228 | user config |
+| **G0** prerequisite | **Hostinger snapshot** in hPanel (cannot be verified from here). Record its name/time. No snapshot = no G3+. | Hostinger |
+| **G1a** archive | On a computer (not the VPS): `scripts/make-release.sh --out release --verify` at a CI-green commit; `scp release/llm-toolkit-*.tar.gz{,.sha256} root@VPS:/root/`; on the VPS `sha256sum -c llm-toolkit-*.tar.gz.sha256`. No GitHub credentials ever on the VPS. | `/root/` (2 files) |
+| **G1b** gate files | `mkdir -p /root/llm-deploy && tar -xzf /root/llm-toolkit-*.tar.gz -C /root/llm-deploy && cd /root/llm-deploy/llm-toolkit-*` then `./vps/preflight.sh --only omniroute --omniroute-port 20128 --out /root/llm-deploy/preflight.txt` and `./vps/inventory.sh snapshot --out /root/llm-deploy/baseline.snap --hash /etc/caddy/Caddyfile --hash /opt/suppar-tools/freellmapi/docker-compose.yml --watch /opt/suppar-tools/freellmapi` (add every other compose/config file and data dir of n8n/SUPPAR/EARNIX from the survey's Docker section). Required: `RESULT: PASS*` (the toolchain warning is expected). | `/root/llm-deploy/*` (0600) |
+| **G3** layout | Dry run: `./vps/deploy.sh --only omniroute prepare --preflight /root/llm-deploy/preflight.txt --baseline /root/llm-deploy/baseline.snap --omniroute-port 20128`; read it; then the same with `--apply`. Creates user `llmomni`, `/srv/llm`, pinned Node 24.11.0 (sha256-verified), a read-only toolkit copy, `deploy.conf` (`GATEWAYS=omniroute`, `PORT_OMNIROUTE=20128`, `BIND_HOST=127.0.0.1`). | `/srv/llm`, 1 user |
+| **G4** install | **Only when load < 1.5 and MemAvailable >= 2.5 GB** (install peak measured at 1.37 GiB; the reported 2,523 MB is exactly at that threshold, so re-check at that moment). `INSTALL_MEM_MAX=1800M ./vps/deploy.sh --apply install omniroute` then `./vps/deploy.sh --apply units` (renders + `systemd-analyze verify` + installs `llm-omniroute.service`, starts nothing). Afterwards optional cache cleanup: `rm -rf /srv/llm/omniroute/home/.npm`. If the install fails on a missing native toolchain, STOP and ask (section 7). | `/srv/llm/omniroute`, 1 unit file |
+| **G5** start + verify | `./vps/deploy.sh --apply enable omniroute --baseline /root/llm-deploy/baseline.snap` (waits up to 120 s for `/api/health/ping`; runs `verify.sh`; a failure disables it again automatically). | enablement of 1 unit |
+| **G6** OVH route (no key) | `./vps/gwctl.sh omniroute credentials` (shows the generated admin password once; change it later). Then, as the service user: `runuser -u llmomni -- env GW_HOME=/srv/llm/omniroute /srv/llm/runtime/node/bin/node /srv/llm/toolkit/termux/lib/provision.mjs omniroute --base http://127.0.0.1:20128 --env-file /srv/llm/omniroute/config/omniroute.env --key-out /srv/llm/omniroute/config/free-guard.upstream.key` (creates the `ovhanon` node + one keyless connection; stores a gateway key for the guard; prints no secret; idempotent). | OmniRoute DB, 1 key file (0600) |
+| **G8** guard | `./vps/free-install.sh --only omniroute units --client-keys` (dry run) then `--apply`; mint a client key as in `docs/VPS-DEPLOYMENT.md` Stage I (`free-guard.mjs --new-client-key phone --client-keys-file /srv/llm/omniroute/config/free-guard.clients`); `./vps/free-install.sh --apply enable omniroute`. | 3 unit files, key files |
+| **later** | `./vps/deploy.sh --apply timers` then `systemctl enable --now llm-monitor.timer llm-backup@omniroute.timer` after review (read-only monitor every 5 min, weekly backup). | timer units |
 
-After G5 and G8 run `./vps/inventory.sh compare /root/llm-deploy/baseline.snap`: every container, volume, network, unit file, user and hashed config of your existing services must be identical.
+## 6. Validation tests (after G8; all read-only or one tiny inference)
+1. `./vps/verify.sh --baseline /root/llm-deploy/baseline.snap` : existing containers, volumes, networks, unit files, users and hashed configs identical; `llmomni` owns nothing outside `/srv/llm`, is in no extra group, only loopback sockets.
+2. `./vps/inventory.sh compare /root/llm-deploy/baseline.snap` : exit 0 (only our own users/units/ports ignored).
+3. `ss -ltnp | grep -E ':(20128|20228)\b'` : both `127.0.0.1` only; `ss -ltn | grep -c ':3001 '` unchanged (the SUPPAR container still published on 127.0.0.1:3001).
+4. `docker ps` : same 10 containers, `suppar-freellmapi` still `healthy`, uptime not reset.
+5. Guard: `curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:20228/__guard/status` = 200; a request with a forbidden model (`gpt-4o`) = 403 `model_blocked`; no client key = 401/403.
+6. One real completion through the guard with the client key, model `ovhanon/gpt-oss-120b` (same call as on the phone): HTTP 200 and tokens reported; `./vps/gwctl.sh omniroute test-model --model ovhanon/gpt-oss-120b` equivalent. Wait 30 s between tries (OVH 2 requests/minute).
+7. `systemctl show llm-omniroute -p MemoryCurrent,MemoryMax,OOMScoreAdjust`; `free -m` before/after: Ollama and n8n RSS unchanged within noise.
+8. OpenCode on the VPS is optional; on the phone, add the VPS only through an SSH tunnel, never an open port.
 
-## What is NOT touched at any step
-The container on 3001, Docker daemon/config/networks/volumes, Caddy and its config, n8n, SUPPAR, EARNIX, databases, firewall rules (the toolkit binds loopback only, so no rule is needed), sshd. Steps 3-8 are the only ones that write to the VPS and each is a separate approval.
+## 7. Warnings and prerequisites
+* **Toolchain warning** (exact: "no native build toolchain (make + g++/gcc + python3): fine when npm finds prebuilt binaries for x86_64/glibc 2.43, but a native module without one would fail to build"). Both gateways use `better-sqlite3` 12.x (prebuilt download via prebuild-install; cloud rehearsal installed the prebuilt binary, no compilation). Risk: no prebuilt for the pinned Node on glibc 2.43, or the download blocked => install fails at G4, nothing enabled. Mitigation: none now; if it happens, ask separately to install the build tools (a system change) or pin another Node.
+* **Hostinger snapshot** (G0): unverified.
+* **n8n 5678 exposure**: independent, see its own document.
+* **Gate files**: the survey leaves none; G1b creates them.
+* **Caddy / Docker networking**: nothing here exposes the guard; SUPPAR/EARNIX/n8n inside Docker cannot reach the host loopback.
 
-## Open items (need the survey output)
-RAM/disk headroom next to the existing services; whether `docker` metadata shows a compose project (so it is clearly excluded from anything the toolkit does); firewall/ufw state; any listener on 13001/20128/3101/20228; whether `/srv` is on its own filesystem.
+## 8. Rollback (smallest first; none touches existing services)
+1. Stop only ours: `systemctl disable --now llm-guard-omniroute.service llm-free-audit-omniroute.timer llm-omniroute.service` (or `./vps/free-install.sh --apply remove omniroute` and `./vps/deploy.sh --apply remove omniroute`; both stop and delete only our unit files; data kept).
+2. Undo the install completely: `./vps/deploy.sh --apply remove omniroute --purge --yes-delete-data` (deletes only `/srv/llm/omniroute` and user `llmomni`); then remove `/srv/llm` and `/root/llm-deploy` by hand if you want nothing left.
+3. Verify nothing else changed: `./vps/inventory.sh compare /root/llm-deploy/baseline.snap`.
+4. Last resort only: restore the Hostinger snapshot (G0): this reverts the WHOLE VPS, including other services' data since the snapshot.
+Failed steps abort by themselves; `enable` auto-disables a service that is unhealthy or fails verification.
 
-## Forensic run result so far (owner's phone screenshot of the END of the report, 2026-11-02 09:45 UTC; the sections above it were not in the screenshot)
-Verified from that output: `pass=46 warn=1 block=0`, `RESULT: PASS-WITH-WARNINGS`, `preflight exit=0`, `ssh exit status: 0`; inventory snapshot 429 lines; report saved on the VPS as `/root/llm-deploy/vps-forensic-20261102T094509Z.txt` and on the phone. Users `llmfree`/`llmomni` and `/srv/llm` do not exist (nothing of this toolkit is on the VPS). Detected by name: `caddy` (with `/etc/caddy/Caddyfile`), `n8n` and `n8n task-runner` processes, unit `suppar-vulnscan.service` (inactive/dead), unit `vyora-n8n-5678-block.service` (active/exited; purpose unknown, name suggests it blocks port 5678: it must be left alone and does not involve our ports as far as its name says, unconfirmed).
+## 9. Monitoring
+* `llm-monitor.timer` (5 min, read-only): unit active, health endpoint, memory vs cap, load vs CPUs, disk, guard kill switch, audit failures, cooldowns, quota vs caps; exits non-zero on CRIT.
+* Manual: `./vps/monitor.sh`, `./vps/free-install.sh status`, `journalctl -u llm-omniroute -u llm-guard-omniroute --since -1h`, `systemctl show llm-omniroute -p NRestarts,MemoryCurrent`.
+* Alert yourself on: `NRestarts` increasing, `MemoryCurrent` near 1.5 GiB, kill-switch engaged (`state/free-audit.flag`), any `/proc/pressure/memory some avg60` above 10.
 
-**The one remaining warning, exact text:** `no native build toolchain (make + g++/gcc + python3): fine when npm finds prebuilt binaries for x86_64/glibc 2.43, but a native module without one would fail to build`.
-Impact: both gateways depend on the native module `better-sqlite3` (FreeLLMAPI and OmniRoute `package.json`). Version 12.10 downloads a prebuilt `linux-x64` binary for the running Node ABI via `prebuild-install` and only compiles when that download is missing. In a cloud rehearsal the installed module contained only the prebuilt `better_sqlite3.node` (no compile artefacts), which indicates the prebuilt path works for Node 24 on x86_64/glibc; this is not a measurement on your VPS. Practical risk: if the download is blocked or no prebuilt exists for the pinned Node, `install` fails at G4 (the step aborts and nothing is enabled). Decision rule: do NOT install `build-essential` pre-emptively (it is a system change); only if G4 fails on this, ask for separate approval for that single package set. It does not block the plan.
+## 10. Future optional stage: a separate FreeLLMAPI
+Only after C has run stably and with fresh approval: `preflight.sh --freellmapi-port 13001`, then `deploy.sh prepare/install/enable freellmapi` with `--freellmapi-port 13001` (this converts the deployment to both gateways: remove `GATEWAYS=omniroute` from `deploy.conf`, or set it to `both`). Cost: about +65-81 MiB RAM (CI) and one more install on disk; isolation from `suppar-freellmapi` is complete (own user, port, data). Reuse of the existing container behind the guard is rejected: no attach mode in the scripts, the FreeLLMAPI audit `--auto-fix` could disable models SUPPAR uses, and adding the OVH route changes SUPPAR's gateway database.
+
+## 11. Readiness
+Ready to proceed to G0 (snapshot) and G1; not ready to install until: the snapshot exists, the quiet-period/load/memory conditions in section 3 hold, and the owner approves each gate. Evidence still missing from the VPS: the CPU/load sample and the n8n exposure facts (the extended `--forensic` survey collects them in one command).

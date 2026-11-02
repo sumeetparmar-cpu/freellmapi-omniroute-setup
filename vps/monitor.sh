@@ -26,7 +26,7 @@ NC="$(nproc 2>/dev/null || echo 1)"; L1="$(cut -d' ' -f1 /proc/loadavg)"
 if awk -v l="$L1" -v n="$NC" -v f="${MON_LOAD_FACTOR:-1.5}" 'BEGIN{exit !(l > n*f)}'; then rec 1 load "load1 $L1 on $NC CPU(s)"; else rec 0 load "load1 $L1 on $NC CPU(s)"; fi
 
 # gateways
-for gw in freellmapi omniroute; do
+for gw in $(selected_gateways); do
   [ -f "$LLM_ROOT/deploy.conf" ] || { rec 1 "$gw" "not deployed ($LLM_ROOT/deploy.conf missing)"; continue; }
   key="PORT_$(echo "$gw" | tr a-z A-Z)"; port="${!key:-$(grep -E "^$key=" "$LLM_ROOT/deploy.conf" | cut -d= -f2)}"
   case "$gw" in freellmapi) ping=/api/ping;; omniroute) ping=/api/health/ping;; esac
@@ -51,7 +51,7 @@ done
 
 # free-only guard + audit (only for gateways whose guard unit has been installed with vps/free-install.sh)
 NODE_BIN="$LLM_ROOT/runtime/node/bin/node"; [ -x "$NODE_BIN" ] || NODE_BIN="$(command -v node || true)"
-for gw in freellmapi omniroute; do
+for gw in $(selected_gateways); do
   gu="llm-guard-$gw.service"; [ -f "$SYSTEMD_DIR/$gu" ] || continue
   if [ -d "$SYSTEMD_RUN_DIR" ]; then
     st="$(systemctl is-active "$gu" 2>/dev/null)"; [ "$st" = active ] && rec 0 "$gw.guard.unit" "active" || rec 2 "$gw.guard.unit" "$st"

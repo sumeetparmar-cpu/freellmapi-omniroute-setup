@@ -35,6 +35,14 @@ MIN_AVAIL_MB="${MIN_AVAIL_MB:-1200}"; WARN_AVAIL_MB="${WARN_AVAIL_MB:-2000}"
 gw_user()  { case "$1" in freellmapi) echo "$LLM_USER_FREELLMAPI";; omniroute) echo "$LLM_USER_OMNIROUTE";; *) die "unknown gateway '$1' (freellmapi|omniroute)";; esac; }
 gw_home()  { echo "$LLM_ROOT/$1"; }
 gw_unit()  { echo "llm-$1.service"; }
+# Which gateways this deployment manages: LLM_GATEWAYS env (set by --only), else GATEWAYS= in deploy.conf, else both.
+# Architecture "C" = omniroute only: freellmapi is then never created, installed, started, verified or monitored.
+selected_gateways() {
+  local g="${LLM_GATEWAYS:-}"
+  [ -n "$g" ] || g="$( [ -f "${LLM_ROOT:-/srv/llm}/deploy.conf" ] && grep -E '^GATEWAYS=' "${LLM_ROOT:-/srv/llm}/deploy.conf" | head -n1 | cut -d= -f2- )"
+  case "$g" in freellmapi|omniroute) echo "$g";; *) echo "freellmapi omniroute";; esac
+}
+gw_selected() { case " $(selected_gateways) " in *" $1 "*) return 0;; *) return 1;; esac; }
 valid_gw() { case "$1" in freellmapi|omniroute) return 0;; *) return 1;; esac; }
 is_root()  { [ "$(id -u)" = 0 ]; }
 os_field() { # os_field KEY -> value from os-release (quotes stripped)

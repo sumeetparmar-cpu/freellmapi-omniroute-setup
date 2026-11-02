@@ -44,7 +44,7 @@ render() { # render TEMPLATE GW
 step_units() {
   local gw td
   [ "$GUARD_PORT_FREELLMAPI" != "$GUARD_PORT_OMNIROUTE" ] || die "guard ports must differ"
-  for gw in freellmapi omniroute; do
+  for gw in $(selected_gateways); do
     td="$(mktemp -d)"
     render llm-guard.service "$gw" > "$td/$(guard_unit "$gw")"
     render llm-free-audit.service "$gw" > "$td/$(audit_unit "$gw")"
@@ -92,7 +92,7 @@ step_enable() {
 
 step_status() {
   local gw gp
-  for gw in freellmapi omniroute; do
+  for gw in $(selected_gateways); do
     gp="$(guard_port "$gw")"
     info "$gw: guard-unit=$([ -f "$SYSTEMD_DIR/$(guard_unit "$gw")" ] && echo installed || echo none) active=$( [ -d "$SYSTEMD_RUN_DIR" ] && systemctl is-active "$(guard_unit "$gw")" 2>/dev/null || echo n/a) port=$gp listening=$(port_listening "$gp" && echo yes || echo no) kill-switch=$([ -e "$LLM_ROOT/$gw/state/free-audit.flag" ] && echo ENGAGED || echo off) audit-timer=$( [ -d "$SYSTEMD_RUN_DIR" ] && systemctl is-active "llm-free-audit-$gw.timer" 2>/dev/null || echo n/a)"
   done

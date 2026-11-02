@@ -22,7 +22,7 @@ info "1/5 integrity of the existing server vs baseline"
 "$HERE/inventory.sh" compare "$BASE" || FAILS=$((FAILS+1))
 
 info "2/5 files owned by the service users outside $LLM_ROOT"
-for gw in freellmapi omniroute; do
+for gw in $(selected_gateways); do
   u="$(gw_user "$gw")"; getent passwd "$u" >/dev/null || continue
   # Lowest CPU/IO priority and no walking of container storage: this must not disturb the live services.
   stray="$("${LOWPRIO[@]}" find / -xdev \( -path /proc -o -path /sys -o -path /run -o -path /tmp -o -path /var/tmp -o -path "$LLM_ROOT" -o -path /var/lib/docker -o -path /var/lib/containerd -o -path /snap \) -prune -o -user "$u" -print 2>/dev/null | head -n 5)"
@@ -30,7 +30,7 @@ for gw in freellmapi omniroute; do
 done
 
 info "3/5 group membership"
-for gw in freellmapi omniroute; do
+for gw in $(selected_gateways); do
   u="$(gw_user "$gw")"; getent passwd "$u" >/dev/null || continue
   g="$(id -nG "$u" 2>/dev/null)"
   [ "$g" = "$u" ] && ok "$u is only in its own group" || fail "$u is in unexpected groups: $g"
@@ -38,7 +38,7 @@ done
 
 info "4/5 sockets owned by the service users"
 PF="$(grep -E '^PORT_FREELLMAPI=' "$LLM_ROOT/deploy.conf" 2>/dev/null | cut -d= -f2)"; PO="$(grep -E '^PORT_OMNIROUTE=' "$LLM_ROOT/deploy.conf" 2>/dev/null | cut -d= -f2)"
-UIDS=""; for gw in freellmapi omniroute; do u="$(gw_user "$gw")"; getent passwd "$u" >/dev/null && UIDS="$UIDS $(id -u "$u")"; done
+UIDS=""; for gw in $(selected_gateways); do u="$(gw_user "$gw")"; getent passwd "$u" >/dev/null && UIDS="$UIDS $(id -u "$u")"; done
 if [ -n "$UIDS" ]; then
   socks="$(for f in /proc/net/tcp /proc/net/tcp6; do [ -r "$f" ] && awk -v uids="$UIDS" -v v6="$([ "$f" = /proc/net/tcp6 ] && echo 1 || echo 0)" '
     function hex(s,  i,c,n){n=0;for(i=1;i<=length(s);i++){c=index("0123456789ABCDEF",toupper(substr(s,i,1)))-1;n=n*16+c}return n}
@@ -55,7 +55,7 @@ fi
 
 info "5/5 unit state"
 if [ -d "$SYSTEMD_RUN_DIR" ] && [ -z "${LLM_NO_SYSTEMD:-}" ]; then
-  for gw in freellmapi omniroute; do
+  for gw in $(selected_gateways); do
     [ -f "$SYSTEMD_DIR/$(gw_unit "$gw")" ] || { info "$(gw_unit "$gw") not installed"; continue; }
     st="$(systemctl is-active "$(gw_unit "$gw")" 2>/dev/null)"; info "$(gw_unit "$gw"): $st"
   done

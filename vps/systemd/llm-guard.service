@@ -24,6 +24,7 @@ UMask=0077
 MemoryMax=192M
 CPUQuota=30%
 Nice=10
+OOMScoreAdjust=500
 TasksMax=64
 LimitNOFILE=2048
 NoNewPrivileges=yes

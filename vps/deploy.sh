@@ -4,6 +4,7 @@
 #   deploy.sh [--apply] <step> [options]
 #
 # Steps (in order):
+#   Option --only omniroute: manage ONLY OmniRoute (no llmfree user/dir/unit; the choice is stored as GATEWAYS= in deploy.conf and read by every later script).
 #   users     create system users llmfree / llmomni (no login, no sudo, no docker group)   GATED: needs --preflight FILE --baseline FILE
 #   dirs      create /srv/llm layout (root-owned shell, 0700 per-gateway homes)
 #   runtime   download pinned Node (sha256 verified) into /srv/llm/runtime; never touches system packages
@@ -31,7 +32,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --apply) APPLY=1 ;; --root) LLM_ROOT="$2"; TOOLKIT_DIR="$LLM_ROOT/toolkit"; shift ;;
     --preflight) PREFLIGHT="$2"; shift ;; --baseline) BASELINE="$2"; shift ;;
-    --freellmapi-port) PORT_FL="$2"; shift ;; --omniroute-port) PORT_OM="$2"; shift ;;
+    --only) case "$2" in freellmapi|omniroute) export LLM_GATEWAYS="$2";; *) die "--only takes freellmapi or omniroute";; esac; shift ;; --freellmapi-port) PORT_FL="$2"; shift ;; --omniroute-port) PORT_OM="$2"; shift ;;
     --purge) PURGE=1 ;; --yes-delete-data) YES_DELETE=1 ;;
     -h|--help) sed -n '2,24p' "$0"; exit 0 ;;
     -*) die "unknown option $1" ;;
@@ -69,7 +70,7 @@ as_user() { # as_user GW cmd... : run as the gateway's service user with a scrub
 step_users() {
   check_gates
   local gw u h
-  for gw in freellmapi omniroute; do
+  for gw in $(selected_gateways); do
     u="$(gw_user "$gw")"; h="$(gw_home "$gw")"
     if getent passwd "$u" >/dev/null; then
       [ "$(getent passwd "$u" | cut -d: -f6)" = "$h" ] || die "user $u exists with a different home; refusing"
@@ -83,7 +84,7 @@ step_users() {
 step_dirs() {
   act "creates the root-owned parent $LLM_ROOT (nothing else on the filesystem is touched)" install -d -m 0755 -o root -g root "$LLM_ROOT" "$LLM_ROOT/runtime"
   local gw u h
-  for gw in freellmapi omniroute; do
+  for gw in $(selected_gateways); do
     u="$(gw_user "$gw")"; h="$(gw_home "$gw")"
     act "creates $h (0700, owned by $u): the only place that gateway can write, including its HOME and npm cache" install -d -m 0700 -o "$u" -g "$u" "$h" "$h/home" "$h/config"
   done
@@ -124,26 +125,28 @@ step_toolkit() {
     bash -c "chown -R root:root '$stage' && chmod -R go-w '$stage' && rm -rf -- '$LLM_ROOT/toolkit.prev' && { [ ! -e '$TOOLKIT_DIR' ] || mv '$TOOLKIT_DIR' '$LLM_ROOT/toolkit.prev'; } && mv '$stage' '$TOOLKIT_DIR'"
 }
 step_config() {
-  local pf="${PORT_FL:-$DEFAULT_PORT_FREELLMAPI}" po="${PORT_OM:-$DEFAULT_PORT_OMNIROUTE}" p
+  local pf="${PORT_FL:-$DEFAULT_PORT_FREELLMAPI}" po="${PORT_OM:-$DEFAULT_PORT_OMNIROUTE}" p chk=()
   valid_port "$pf" && valid_port "$po" || die "invalid port"
-  [ "$pf" != "$po" ] || die "ports must differ"
-  for p in "$pf" "$po"; do
+  gw_selected freellmapi && gw_selected omniroute && { [ "$pf" != "$po" ] || die "ports must differ"; }
+  gw_selected freellmapi && chk+=("$pf"); gw_selected omniroute && chk+=("$po")
+  for p in "${chk[@]}"; do
     if port_listening "$p"; then
       if [ -f "$LLM_ROOT/deploy.conf" ] && { [ "$(read_conf PORT_FREELLMAPI)" = "$p" ] || [ "$(read_conf PORT_OMNIROUTE)" = "$p" ]; }; then warn "port $p is in use, but it is already ours (deploy.conf)"
       else die "port $p is already in use by something else (run preflight.sh for proposals)"; fi
     fi
   done
   write_file "$LLM_ROOT/deploy.conf" 0644 root:root "records the chosen loopback ports for the units and monitor (no secrets)" <<CONF
-PORT_FREELLMAPI=$pf
-PORT_OMNIROUTE=$po
+$(gw_selected freellmapi && echo "PORT_FREELLMAPI=$pf")
+$(gw_selected omniroute && echo "PORT_OMNIROUTE=$po")
+GATEWAYS=$([ "$(selected_gateways)" = "freellmapi omniroute" ] && echo both || selected_gateways)
 BIND_HOST=127.0.0.1
 CONF
   local gw u
-  for gw in freellmapi omniroute; do
+  for gw in $(selected_gateways); do
     u="$(gw_user "$gw")"
     write_file "$(gw_home "$gw")/config/gateways.env" 0600 "$u:$u" "non-secret settings for $gw: both ports (so the toolkit rejects a clash), loopback bind, pinned tested versions" <<CONF
-FREELLMAPI_PORT=$pf
-OMNIROUTE_PORT=$po
+$(gw_selected freellmapi && echo "FREELLMAPI_PORT=$pf")
+$(gw_selected omniroute && echo "OMNIROUTE_PORT=$po")
 GATEWAY_BIND_HOST=127.0.0.1
 FREELLMAPI_REF=${FREELLMAPI_REF:-v0.16.12}
 OMNIROUTE_VERSION=${OMNIROUTE_VERSION:-3.8.52}
@@ -151,7 +154,7 @@ CONF
   done
 }
 step_install() {
-  local gw="${ARGS[0]:-}"; valid_gw "$gw" || die "usage: install <freellmapi|omniroute>"
+  local gw="${ARGS[0]:-}"; valid_gw "$gw" || die "usage: install <freellmapi|omniroute>"; gw_selected "$gw" || die "$gw is not part of this deployment (GATEWAYS=$(selected_gateways)); not installing it"
   local u h; u="$(gw_user "$gw")"; h="$(gw_home "$gw")"
   if [ "$APPLY" = 1 ]; then
     getent passwd "$u" >/dev/null || die "user $u missing (run users)"
@@ -172,7 +175,7 @@ render_unit() { # render_unit GW -> unit text on stdout
 }
 step_units() {
   local gw u td tmp
-  for gw in freellmapi omniroute; do
+  for gw in $(selected_gateways); do
     u="$SYSTEMD_DIR/$(gw_unit "$gw")"
     td="$(mktemp -d)"; tmp="$td/$(gw_unit "$gw")"     # systemd-analyze needs a real unit file name (.service suffix)
     render_unit "$gw" > "$tmp"
@@ -195,7 +198,7 @@ step_timers() {
   if [ -d "$SYSTEMD_RUN_DIR" ]; then act "reloads systemd's unit list" systemctl daemon-reload; fi
 }
 step_enable() {
-  local gw="${ARGS[0]:-}"; valid_gw "$gw" || die "usage: enable <freellmapi|omniroute> [--baseline FILE]"
+  local gw="${ARGS[0]:-}"; valid_gw "$gw" || die "usage: enable <freellmapi|omniroute> [--baseline FILE]"; gw_selected "$gw" || die "$gw is not part of this deployment (GATEWAYS=$(selected_gateways)); not enabling it"
   [ -n "$BASELINE" ] && [ -f "$BASELINE" ] || die "gate: pass --baseline FILE so the result can be verified against it"
   local port unit; port="$(gw_port "$gw")"; unit="$(gw_unit "$gw")"; [ -n "$port" ] || [ "$APPLY" != 1 ] || die "no port recorded (run config)"
   if port_listening "${port:-0}" && ! { [ -d "$SYSTEMD_RUN_DIR" ] && systemctl is-active --quiet "$unit"; }; then die "port $port is in use by another process"; fi
@@ -221,7 +224,7 @@ _contain() {
 step_status() {
   local gw
   info "root: $LLM_ROOT  exists=$([ -d "$LLM_ROOT" ] && echo yes || echo no)  node=$("$LLM_ROOT/runtime/node/bin/node" -v 2>/dev/null || echo none)  toolkit=$(cat "$TOOLKIT_DIR/VERSION" 2>/dev/null | cut -c1-12 || echo none)"
-  for gw in freellmapi omniroute; do
+  for gw in $(selected_gateways); do
     local u port; u="$(gw_user "$gw")"; port="$(gw_port "$gw")"
     info "$gw: user=$(getent passwd "$u" >/dev/null && echo present || echo absent) dir=$([ -d "$(gw_home "$gw")" ] && echo yes || echo no) port=${port:-unset} listening=$([ -n "$port" ] && port_listening "$port" && echo yes || echo no) unit=$([ -f "$SYSTEMD_DIR/$(gw_unit "$gw")" ] && echo installed || echo none) active=$( [ -d "$SYSTEMD_RUN_DIR" ] && systemctl is-active "$(gw_unit "$gw")" 2>/dev/null || echo n/a)"
   done

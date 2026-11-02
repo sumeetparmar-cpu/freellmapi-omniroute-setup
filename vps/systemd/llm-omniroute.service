@@ -31,6 +31,8 @@ CPUQuota=80%
 CPUWeight=50
 IOWeight=50
 Nice=10
+# If the host ever runs out of memory, the kernel should pick THIS service before the neighbours (Ollama, n8n, SUPPAR).
+OOMScoreAdjust=500
 TasksMax=512
 LimitNOFILE=4096
 

@@ -60,6 +60,17 @@ sec "NETWORK EXPOSURE (non-loopback listeners; process names only)"
 ss -ltnp 2>/dev/null | awk 'NR>1 && $4 !~ /^(127\.|\[::1\])/ {print "  "$4"  "$NF}' | sed -E 's/users:\(\(("[^"]+").*/\1/' | head -30
 echo "  docker ports published on non-loopback addresses:"; docker ps --format '  {{.Names}} {{.Ports}}' 2>/dev/null | grep -E '0\.0\.0\.0|:::' | head -20
 echo "  swap: $(swapon --show --noheadings 2>/dev/null | wc -l) device(s); vm.swappiness=$(cat /proc/sys/vm/swappiness 2>/dev/null)"
+sec "N8N / PORT 5678 EXPOSURE (read-only; nothing is changed)"
+echo "listeners on 5678 (address:port process):"; ss -ltnp 2>/dev/null | awk '$4 ~ /:5678$/{print "  "$4"  "$NF}' | sed -E 's/users:\(\(("[^"]+").*/\1/'
+echo "docker containers publishing 5678:"; docker ps --format '  {{.Names}} {{.Ports}}' 2>/dev/null | grep -E '5678' 
+if systemctl cat vyora-n8n-5678-block.service >/dev/null 2>&1; then echo "unit vyora-n8n-5678-block.service (file as installed; unit files hold no secrets by convention):"; systemctl cat vyora-n8n-5678-block.service 2>/dev/null | grep -vE '^\s*(#|$)' | head -25 | sed 's/^/  /'; echo "  state: $(systemctl is-active vyora-n8n-5678-block.service 2>&1) / enabled: $(systemctl is-enabled vyora-n8n-5678-block.service 2>&1)"; else echo "no unit named vyora-n8n-5678-block.service"; fi
+echo "firewall rules mentioning 5678:"; { nft list ruleset 2>/dev/null; iptables -S 2>/dev/null; iptables -t nat -S 2>/dev/null; } | grep -E '5678|DOCKER-USER' | head -20 | sed 's/^/  /'
+sec "CPU / LOAD SAMPLE (about 8 seconds; read-only)"
+echo "load: $(cut -d' ' -f1-3 /proc/loadavg) on $(nproc) CPU(s)"
+echo "top CPU consumers (3 samples, 2 s apart, %CPU command):"; top -b -n 3 -d 2 -w 120 2>/dev/null | awk '/^ *PID/{blk++} blk>=2 && NF>=12 && $1 ~ /^[0-9]+$/ && c[blk]++<5 {printf "  sample%d %s%% %s\n", blk-1, $9, $12}' | head -20
+echo "docker per-container CPU/RAM (2 samples):"; for _ in 1 2; do docker stats --no-stream --format '  {{.Name}} cpu={{.CPUPerc}} mem={{.MemUsage}}' 2>/dev/null | sort -t= -k2 -r | head -6; echo "  --"; sleep 2; done
+echo "vmstat (4 x 1s): r=run queue, wa=io wait, si/so=swap:"; vmstat 1 4 2>/dev/null | sed 's/^/  /'
+echo "pressure stall (kernel PSI, if present):"; for f in cpu memory io; do [ -r /proc/pressure/$f ] && echo "  $f: $(head -1 /proc/pressure/$f)"; done
 sec "FIREWALL (read-only listing)"
 echo "ufw: $(ufw status verbose 2>&1 | head -12 | tr '\n' ';')"
 command -v nft >/dev/null && echo "nft rule count: $(nft list ruleset 2>/dev/null | grep -c . )"

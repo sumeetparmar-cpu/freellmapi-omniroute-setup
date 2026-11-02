@@ -2,7 +2,8 @@
 # READ-ONLY preflight for deploying FreeLLMAPI + OmniRoute next to existing services (SUPPAR, EARNIX, n8n, Caddy, Docker).
 # Changes nothing, sends no credentials. Exit 0 = no blockers, 1 = blockers. Safe to run as a normal user; root adds process names.
 #
-#   vps/preflight.sh [--freellmapi-port N] [--omniroute-port N] [--root DIR] [--offline] [--out FILE]
+#   vps/preflight.sh [--only omniroute|freellmapi] [--freellmapi-port N] [--omniroute-port N] [--root DIR] [--offline] [--out FILE]
+#   --only omniroute = architecture C: the FreeLLMAPI port and its guard port are not checked or proposed.
 #
 # --out FILE stores the report (mode 600). deploy.sh refuses to apply the first step unless that file says RESULT: PASS*.
 set -uo pipefail
@@ -13,7 +14,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OFFLINE=0; OUT=""; REQ_FL=""; REQ_OM=""
 while [ $# -gt 0 ]; do
   case "$1" in
-    --freellmapi-port) REQ_FL="$2"; shift ;; --omniroute-port) REQ_OM="$2"; shift ;;
+    --only) case "$2" in freellmapi|omniroute) export LLM_GATEWAYS="$2";; *) die "--only takes freellmapi or omniroute";; esac; shift ;; --freellmapi-port) REQ_FL="$2"; shift ;; --omniroute-port) REQ_OM="$2"; shift ;;
     --root) LLM_ROOT="$2"; shift ;; --offline) OFFLINE=1 ;; --out) OUT="$2"; shift ;;
     -h|--help) sed -n '2,8p' "$0"; exit 0 ;;
     *) die "unknown option $1" ;;
@@ -135,9 +136,10 @@ info_ "listening sockets now:"
 while IFS= read -r l; do emit "$l"; done < <(listeners | sort -t$'\t' -k2n | awk -F'\t' '{printf "         %s:%s %s\n",$1,$2,($3==""?"":"("$3")")}')
 if ! is_root && ! have ss; then info_ "process names unavailable (no ss and not root)"; fi
 PF="$REQ_FL"; [ -n "$PF" ] || PF="$DEFAULT_PORT_FREELLMAPI"; PO="$REQ_OM"; [ -n "$PO" ] || PO="$DEFAULT_PORT_OMNIROUTE"
-[ "$PF" != "$PO" ] || block "both gateways were given port $PF"
+gw_selected freellmapi && gw_selected omniroute && { [ "$PF" != "$PO" ] || block "both gateways were given port $PF"; }
 for spec in "freellmapi:$PF:$ALT_PORTS_FREELLMAPI" "omniroute:$PO:$ALT_PORTS_OMNIROUTE"; do
   g="${spec%%:*}"; rest="${spec#*:}"; p="${rest%%:*}"; alts="${rest#*:}"
+  gw_selected "$g" || { info_ "$g not selected (--only): its port is not checked"; continue; }
   if port_listening "$p"; then
     ALT="$(EXCLUDE_PORTS="$PF $PO" pick_free_port "${alts%% *}" "${alts#* }")" || ALT=""
     block "port $p for $g is already in use by something else; proposal: use ${ALT:-<none free>} (re-run with --$g-port)"
@@ -147,6 +149,7 @@ done
 GPF="${GUARD_PORT_FREELLMAPI:-3101}"; GPO="${GUARD_PORT_OMNIROUTE:-20228}"
 for spec in "freellmapi guard:$GPF" "omniroute guard:$GPO"; do
   nm="${spec%%:*}"; p="${spec##*:}"
+  gw_selected "${nm%% *}" || continue
   if port_listening "$p"; then warn_ "port $p for the optional $nm is already in use (free-install.sh would refuse; set GUARD_PORT_* to another free port)"; else pass "port $p free for the optional $nm"; fi
 done
 # A fixed port inside the kernel's ephemeral range can be taken by an outgoing connection at the moment a service starts.
@@ -154,11 +157,11 @@ read -r EPLO EPHI < "${PORT_RANGE_FILE:-/proc/sys/net/ipv4/ip_local_port_range}"
 RESV="$(cat "${RESERVED_PORTS_FILE:-/proc/sys/net/ipv4/ip_local_reserved_ports}" 2>/dev/null)"
 in_reserved() { local p="$1" r lo hi; for r in $(printf '%s' "$RESV" | tr ',' ' '); do lo="${r%-*}"; hi="${r#*-}"; [ "$p" -ge "$lo" ] 2>/dev/null && [ "$p" -le "$hi" ] 2>/dev/null && return 0; done; return 1; }
 if [ -n "${EPLO:-}" ] && [ -n "${EPHI:-}" ]; then
-  for p in "$PF" "$PO" "$GPF" "$GPO"; do
+  for p in $(gw_selected freellmapi && echo "$PF $GPF") $(gw_selected omniroute && echo "$PO $GPO"); do
     if [ "$p" -ge "$EPLO" ] && [ "$p" -le "$EPHI" ] && ! in_reserved "$p"; then warn_ "port $p lies inside the ephemeral range ${EPLO}-${EPHI}: an outgoing connection could occupy it when a service starts (pick a port below $EPLO or reserve it via net.ipv4.ip_local_reserved_ports)"; fi
   done
 fi
-emit "PROPOSED_PORT_FREELLMAPI=$PF"; emit "PROPOSED_PORT_OMNIROUTE=$PO"
+gw_selected freellmapi && emit "PROPOSED_PORT_FREELLMAPI=$PF"; gw_selected omniroute && emit "PROPOSED_PORT_OMNIROUTE=$PO"; emit "GATEWAYS_SELECTED=$(selected_gateways | tr " " ",")"
 
 head_ "Existing services (read-only detection; nothing is touched)"
 PAT='suppar|earnix|n8n|caddy'
