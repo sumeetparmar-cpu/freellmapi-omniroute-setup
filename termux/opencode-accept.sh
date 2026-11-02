@@ -46,9 +46,10 @@ ck "baseline: the test really fails before any fix" bash -c '! node --test'
 echo "(do not type or paste in this window until it finishes)"
 echo "-- guard counters before: $(counts | tr '\n' ' ')"
 echo "== 1. coding task through FreeLLMAPI (freellmapi/gpt-oss-20b)"
-"$LAUNCH" run --model freellmapi/gpt-oss-20b "$TASK" > "$T/fl.out" 2>&1 < /dev/null; echo "   opencode exit $?"; show FreeLLMAPI "$T/fl.out"
+"$LAUNCH" run --model freellmapi/gpt-oss-20b "$TASK${ACCEPT_FL_HINT:-}" > "$T/fl.out" 2>&1 < /dev/null; echo "   opencode exit $?"; show FreeLLMAPI "$T/fl.out"
 ck "FreeLLMAPI: file edited and tests pass (checked by node --test, not by the model)" node --test
 git diff -- math.js > "$T/fl.diff"; ck "FreeLLMAPI: math.js itself was changed" test -s "$T/fl.diff"
+if [ "${ACCEPT_ONLY_FL:-0}" = 1 ]; then echo "== FreeLLMAPI-only run: $PASS passed, $FAIL failed"; [ "$FAIL" -eq 0 ]; exit; fi   # quick re-test of just the 20B (a few minutes)
 git checkout -q -- . ; echo "== 2. same task through OmniRoute (omniroute/ovhanon/gpt-oss-120b)"
 "$LAUNCH" run --model omniroute/ovhanon/gpt-oss-120b "$TASK" > "$T/or.out" 2>&1 < /dev/null; echo "   opencode exit $?"; show OmniRoute "$T/or.out"
 ck "OmniRoute: file edited and tests pass" node --test
