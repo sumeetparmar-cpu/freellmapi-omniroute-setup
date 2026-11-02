@@ -61,3 +61,7 @@ Honest summary: it works end to end and costs nothing, but expect the small open
 
 ## 6. Usage tracking
 `bash termux/gateways.sh usage` shows, per guard, requests allowed/blocked today and counts by provider (read from the guard, not from the model's own claims).
+
+## Troubleshooting: `UnknownError: Unexpected server error ... "ref": "err_xxxxxxxx"`
+
+This is OpenCode's own generic error when the model or provider you asked for is not an enabled provider. It is NOT a gateway, guard or OVH fault: nothing reaches the guard, so no guard or gateway log mentions the `err_` ref. Confirmed on the phone: `-m freeLLMapi/gpt-oss-20b` (wrong capitalization) fails with this error, while `-m freellmapi/gpt-oss-20b` returns the answer through the guard. Provider ids are lowercase and case-sensitive: `freellmapi/gpt-oss-20b`, `omniroute/ovhanon/gpt-oss-120b`.
