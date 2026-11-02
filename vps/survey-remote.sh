@@ -2,7 +2,7 @@
 # Runs ON the VPS (started by remote-survey.sh). READ-ONLY: reads system state, writes only inside its own temp dir (arg 1), prints a report.
 # Never prints file contents of other services, environment variables, or secrets: names, ports, sizes and versions only.
 set -uo pipefail
-D="${1:?temp dir}"; FLP="${2:-3001}"; OMP="${3:-20128}"; CNAME="${4:-}"; GFL=3101; GOM=20228; cd "$D/vps" || exit 1
+GFL=3101; GOM=20228; D="${1:?temp dir}"; FLP="${2:-3001}"; OMP="${3:-20128}"; CNAME="${4:-}"; [ "$CNAME" = none ] && CNAME=""; ONLY="${5:-both}"; case "$ONLY" in omniroute|freellmapi) ONLYARG=(--only "$ONLY"); WANT=$([ "$ONLY" = omniroute ] && echo "$OMP $GOM" || echo "$FLP $GFL");; *) ONLYARG=(); WANT="$FLP $OMP $GFL $GOM";; esac;  cd "$D/vps" || exit 1
 sec() { printf '\n=== %s ===\n' "$1"; }
 sec "HOST"
 echo "user=$(id -un) host=$(hostname) time=$(date -u +%FT%TZ)"; . /etc/os-release 2>/dev/null && echo "os=$PRETTY_NAME"; echo "kernel=$(uname -r) arch=$(uname -m) virt=$(systemd-detect-virt 2>/dev/null || echo unknown)"
@@ -13,7 +13,8 @@ echo "cgroup=$(stat -fc %T /sys/fs/cgroup 2>/dev/null) overcommit=$(cat /proc/sy
 echo "top memory users (name rss_MB):"; ps -eo comm,rss --sort=-rss 2>/dev/null | awk 'NR>1&&NR<=8{printf "  %s %d\n",$1,$2/1024}'
 sec "LISTENING PORTS (tcp)"
 ss -ltnp 2>/dev/null | awk 'NR==1||1' | sed -E 's/users:\(\(("[^"]+"),pid=[0-9]+,fd=[0-9]+\)\)/\1/' | cut -c1-110
-echo "ports we want: $FLP $OMP $GFL $GOM -> $(for p in $FLP $OMP $GFL $GOM; do ss -ltn 2>/dev/null | grep -q ":$p " && echo "$p=TAKEN" || echo "$p=free"; done | tr '\n' ' ')"
+echo "deployment scope: $ONLY (both = default dual-gateway check)"
+echo "ports we want: $WANT -> $(for p in $WANT; do ss -ltn 2>/dev/null | grep -q ":$p " && echo "$p=TAKEN" || echo "$p=free"; done | tr '\n' ' ')"
 echo "who listens on our candidate and default ports (address:port; loopback-only means 127.0.0.1):"; ss -ltn 2>/dev/null | awk -v re=":($FLP|$OMP|$GFL|$GOM|3001)$" 'NR>1&&$4 ~ re{print "  "$4}' 
 sec "SERVICES (running systemd units, names only)"
 systemctl list-units --type=service --state=running --no-pager --no-legend 2>/dev/null | awk '{print $1}' | head -40
@@ -82,7 +83,7 @@ command -v caddy >/dev/null && echo "caddy=$(caddy version 2>/dev/null | head -1
 echo "firewall: $(ufw status 2>/dev/null | head -1 || true) $(command -v nft >/dev/null && echo 'nft present')"
 echo "ssh password auth: $(sshd -T 2>/dev/null | awk '/^passwordauthentication/{print $2}')"
 sec "TOOLKIT PREFLIGHT (read-only)"
-./preflight.sh --freellmapi-port "$FLP" --omniroute-port "$OMP" --out "$D/preflight.txt" 2>&1 | sed -n '1,200p'
+./preflight.sh "${ONLYARG[@]}" --freellmapi-port "$FLP" --omniroute-port "$OMP" --out "$D/preflight.txt" 2>&1 | sed -n '1,200p'
 echo "preflight exit=$?"
 sec "TOOLKIT INVENTORY SNAPSHOT (identities only, stored in the temp dir)"
 ./inventory.sh snapshot --out "$D/baseline.snap" 2>&1 | tail -n 15

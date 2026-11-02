@@ -9,6 +9,7 @@
 #   dirs      create /srv/llm layout (root-owned shell, 0700 per-gateway homes)
 #   runtime   download pinned Node (sha256 verified) into /srv/llm/runtime; never touches system packages
 #   toolkit   copy this toolkit to /srv/llm/toolkit (root-owned, read-only to the service users)
+#   showconf  READ-ONLY: print exactly what `config` would write (deploy.conf with GATEWAYS=..., gateways.env)
 #   config    choose ports (must be free) and write each gateway's non-secret config
 #   install <freellmapi|omniroute>   run the tested installer AS the service user, niced; secrets are generated on the server
 #   units     render + verify + install llm-*.service (does not enable or start)
@@ -135,23 +136,33 @@ step_config() {
       else die "port $p is already in use by something else (run preflight.sh for proposals)"; fi
     fi
   done
-  write_file "$LLM_ROOT/deploy.conf" 0644 root:root "records the chosen loopback ports for the units and monitor (no secrets)" <<CONF
-$(gw_selected freellmapi && echo "PORT_FREELLMAPI=$pf")
-$(gw_selected omniroute && echo "PORT_OMNIROUTE=$po")
-GATEWAYS=$([ "$(selected_gateways)" = "freellmapi omniroute" ] && echo both || selected_gateways)
-BIND_HOST=127.0.0.1
-CONF
+  write_file "$LLM_ROOT/deploy.conf" 0644 root:root "records the chosen loopback ports for the units and monitor (no secrets)" < <(render_deploy_conf "$pf" "$po")
   local gw u
   for gw in $(selected_gateways); do
     u="$(gw_user "$gw")"
-    write_file "$(gw_home "$gw")/config/gateways.env" 0600 "$u:$u" "non-secret settings for $gw: both ports (so the toolkit rejects a clash), loopback bind, pinned tested versions" <<CONF
-$(gw_selected freellmapi && echo "FREELLMAPI_PORT=$pf")
-$(gw_selected omniroute && echo "OMNIROUTE_PORT=$po")
-GATEWAY_BIND_HOST=127.0.0.1
-FREELLMAPI_REF=${FREELLMAPI_REF:-v0.16.12}
-OMNIROUTE_VERSION=${OMNIROUTE_VERSION:-3.8.52}
-CONF
+    write_file "$(gw_home "$gw")/config/gateways.env" 0600 "$u:$u" "non-secret settings for $gw: the selected ports (so the toolkit rejects a clash), loopback bind, pinned tested versions" < <(render_gateways_env "$pf" "$po")
   done
+}
+# What `config` writes, as text (shared by `config` and the read-only `showconf`, so the tests can prove the content).
+render_deploy_conf() { # render_deploy_conf PF PO
+  gw_selected freellmapi && echo "PORT_FREELLMAPI=$1"
+  gw_selected omniroute && echo "PORT_OMNIROUTE=$2"
+  echo "GATEWAYS=$([ "$(selected_gateways)" = "freellmapi omniroute" ] && echo both || selected_gateways)"
+  echo "BIND_HOST=127.0.0.1"
+}
+render_gateways_env() { # render_gateways_env PF PO
+  gw_selected freellmapi && echo "FREELLMAPI_PORT=$1"
+  gw_selected omniroute && echo "OMNIROUTE_PORT=$2"
+  echo "GATEWAY_BIND_HOST=127.0.0.1"
+  gw_selected freellmapi && echo "FREELLMAPI_REF=${FREELLMAPI_REF:-v0.16.12}"
+  gw_selected omniroute && echo "OMNIROUTE_VERSION=${OMNIROUTE_VERSION:-3.8.52}"
+  return 0
+}
+step_showconf() { # read-only: print exactly what `config` would write
+  local pf="${PORT_FL:-$DEFAULT_PORT_FREELLMAPI}" po="${PORT_OM:-$DEFAULT_PORT_OMNIROUTE}"
+  valid_port "$pf" && valid_port "$po" || die "invalid port"
+  echo "# $LLM_ROOT/deploy.conf"; render_deploy_conf "$pf" "$po"
+  local gw; for gw in $(selected_gateways); do echo "# $(gw_home "$gw")/config/gateways.env"; render_gateways_env "$pf" "$po"; done
 }
 step_install() {
   local gw="${ARGS[0]:-}"; valid_gw "$gw" || die "usage: install <freellmapi|omniroute>"; gw_selected "$gw" || die "$gw is not part of this deployment (GATEWAYS=$(selected_gateways)); not installing it"
@@ -246,7 +257,7 @@ step_remove() {
 }
 
 case "$STEP" in
-  users) step_users ;; dirs) step_dirs ;; runtime) step_runtime ;; toolkit) step_toolkit ;; config) step_config ;;
+  users) step_users ;; dirs) step_dirs ;; runtime) step_runtime ;; toolkit) step_toolkit ;; config) step_config ;; showconf) step_showconf ;;
   install) step_install ;; units) step_units ;; timers) step_timers ;; enable) step_enable ;; status) step_status ;; remove) step_remove ;;
   prepare) step_users && step_dirs && step_runtime && step_toolkit && step_config ;;
   *) die "unknown step '$STEP'" ;;

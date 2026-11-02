@@ -37,6 +37,35 @@ t "dry-run config with 3001 taken: both => refused, --only omniroute => fine"  b
 t "install freellmapi is refused when the deployment is omniroute-only"        bash -c 'mkdir -p "$1/llm"; printf "GATEWAYS=omniroute\nPORT_OMNIROUTE=20128\n" > "$1/llm/deploy.conf"; ! env LLM_ROOT="$1/llm" "$0/vps/deploy.sh" install freellmapi 2>&1 | grep -q "x" ; env LLM_ROOT="$1/llm" "$0/vps/deploy.sh" install freellmapi 2>&1 | grep -q "not part of this deployment"' "$ROOT" "$T"
 t "units dry-run renders only llm-omniroute.service"                           bash -c 'out=$(env LLM_ROOT="$1/llm" SYSTEMD_DIR="$1/units" SYSTEMD_RUN_DIR="$1/fake-sd" "$0/vps/deploy.sh" units 2>&1); echo "$out" | grep -q "omniroute" && ! echo "$out" | grep -q "llm-freellmapi.service"' "$ROOT" "$T"
 
+echo "# showconf: what gets saved (read-only step)"
+SC() { env LLM_ROOT="$T/llm-sc" SYSTEMD_DIR="$T/units" SYSTEMD_RUN_DIR="$T/fake-sd" "$ROOT/vps/deploy.sh" "$@" 2>&1; }
+SC --only omniroute --omniroute-port 20128 showconf > "$T/sc_only.txt"
+SC showconf > "$T/sc_both.txt"
+t "--only omniroute: deploy.conf contains GATEWAYS=omniroute, PORT_OMNIROUTE=20128, BIND_HOST=127.0.0.1"  bash -c 'grep -q "^GATEWAYS=omniroute$" "$0" && grep -q "^PORT_OMNIROUTE=20128$" "$0" && grep -q "^BIND_HOST=127.0.0.1$" "$0"' "$T/sc_only.txt"
+t "--only omniroute: no FreeLLMAPI port, ref or path anywhere in the saved configuration" bash -c '! grep -qiE "freellmapi" "$0"' "$T/sc_only.txt"
+t "--only omniroute: GATEWAY_BIND_HOST=127.0.0.1 in gateways.env and only the omniroute home is written" bash -c 'grep -q "^GATEWAY_BIND_HOST=127.0.0.1$" "$0" && grep -q "/omniroute/config/gateways.env" "$0" && [ "$(grep -c "gateways.env" "$0")" = 1 ]' "$T/sc_only.txt"
+t "default (both): GATEWAYS=both with both ports, both gateways.env files (unchanged behaviour)" bash -c 'grep -q "^GATEWAYS=both$" "$0" && grep -q "^PORT_FREELLMAPI=3001$" "$0" && grep -q "^PORT_OMNIROUTE=20128$" "$0" && [ "$(grep -c "gateways.env" "$0")" = 2 ]' "$T/sc_both.txt"
+t "showconf wrote nothing (read-only)"                      bash -c '[ ! -e "$0/llm-sc" ]' "$T"
+
+echo "# the survey itself (this was the bug: it ran the dual-gateway preflight with port 3001 occupied)"
+cat > "$T/fakessh" <<'S'
+#!/usr/bin/env bash
+while [ $# -gt 0 ]; do case "$1" in -o|-p|-i) shift 2;; -*) shift;; *) break;; esac; done; shift; exec bash -c "$1"
+S
+chmod +x "$T/fakessh"
+SV() { env HOME="$T" SSH_BIN="$T/fakessh" OS_RELEASE="$T/os26" MEMINFO_FILE="$T/mem" SYSTEMD_RUN_DIR="$T/fake-sd" SYSTEMD_DIR="$T/units" LISTENERS_FILE="$T/listen" \
+  MOUNTS_FILE="$T/mounts" CGROUP_MEM_FILE="$T/cg" OVERCOMMIT_FILE="$T/oc" PORT_RANGE_FILE="$T/range" RESERVED_PORTS_FILE="$T/resv" LLM_ROOT="$T/nonexistent/llm" \
+  bash "$ROOT/vps/remote-survey.sh" me@host "$@"; }
+SV --forensic --omniroute-port 20128 --out "$T/sv_both.txt" > /dev/null 2>&1
+SV --forensic --only omniroute --omniroute-port 20128 --out "$T/sv_only.txt" > /dev/null 2>&1
+t "survey WITHOUT --only (default dual): port 3001 occupied => BLOCK (behaviour unchanged)"  grep -q "^\[BLOCK\] port 3001 for freellmapi is already in use" "$T/sv_both.txt"
+t "survey WITH --only omniroute: occupied port 3001 is NOT a blocker"                         bash -c '! grep -q "^\[BLOCK\] port 3001" "$0"' "$T/sv_only.txt"
+t "survey --only omniroute: preflight ran with the omniroute scope"                           grep -q "GATEWAYS_SELECTED=omniroute" "$T/sv_only.txt"
+t "survey --only omniroute: scope line, and only 20128 + 20228 are the ports we want"         bash -c 'grep -q "deployment scope: omniroute" "$0" && grep -q "ports we want: 20128 20228 ->" "$0"' "$T/sv_only.txt"
+t "survey --only omniroute: omniroute port 20128 and guard 20228 reported free"               bash -c 'grep -q "port 20128 free for omniroute" "$0" && grep -q "port 20228 free for the optional omniroute guard" "$0"' "$T/sv_only.txt"
+t "survey --only omniroute: no FreeLLMAPI port or guard line in the preflight"                bash -c '! grep -q "port 3101" "$0" && ! grep -q "PROPOSED_PORT_FREELLMAPI" "$0"' "$T/sv_only.txt"
+t "survey rejects an unknown --only value"                                                    bash -c '! env HOME="$1" SSH_BIN="$1/fakessh" bash "$0/vps/remote-survey.sh" me@host --only nonsense >/dev/null 2>&1' "$ROOT" "$T"
+
 echo "# selected_gateways()"
 sg() { env LLM_ROOT="$T/llm" "$@" bash -c '. "$0/vps/lib/vps-common.sh"; selected_gateways' "$ROOT"; }
 t "no deploy.conf, no env => both"                          bash -c '[ "$(env -u LLM_GATEWAYS LLM_ROOT="$1/none" bash -c ". \"$0/vps/lib/vps-common.sh\"; selected_gateways" "$0" "$1")" = "freellmapi omniroute" ]' "$ROOT" "$T"
