@@ -18,6 +18,35 @@ bash vps/remote-survey.sh root@VPS_ADDRESS --freellmapi-port 13001 --omniroute-p
 ```
 Reports: OS/RAM/disk, listeners (bind addresses of 13001/20128/3101/20228/3001), running services, **who owns port 3001** (container name, image, status, port mappings, compose project/service/working dir/config files, restart policy, memory limit: labels and state only, no environment variables), firewall listing, the toolkit preflight with the 13001 port, and an inventory snapshot. Required result before anything else: `RESULT: PASS` (warnings reviewed) and 13001/20128/3101/20228 free.
 
+## Strategy decision: reuse the existing FreeLLMAPI (A) or a second instance on 13001 (B)?
+Reported by the owner (not verified by this repo): Ubuntu 26.04.1, 2 CPUs, RAM 7,935 MB total / 2,523 MB available, swap 0, disk free 16 GB, load 1.98, 10 containers / 17 volumes, nft firewall active; container `suppar-freellmapi` Up 4 days (healthy) on `127.0.0.1:3001`, Compose file `/opt/suppar-tools/freellmapi/docker-compose.yml`; 13001/20128/3101/20228 free.
+
+**What the repo's scripts/units prove about reuse (verified in code):**
+* `deploy.sh config` refuses a port that is already in use by something else, and the guard + audit units are rendered for `/srv/llm/<gw>` with the service user `llmfree`, an upstream key file `free-guard.upstream.key` and `free-audit.env` credentials. There is no "attach to an existing gateway" mode: reuse needs new code, not just a flag.
+* The audit unit for FreeLLMAPI runs with `--auto-fix`: it logs in with admin credentials and DISABLES models it cannot verify as free. Pointed at the existing instance, that would change SUPPAR's own gateway settings (models SUPPAR may rely on).
+* Zero-cost OVH inference needs a custom endpoint added inside the gateway (its database). Doing that on the existing instance modifies a production service's data.
+* The guard itself only needs an HTTP upstream (127.0.0.1:3001 would be reachable from the host, since the container publishes to loopback), so the proxy part would technically work; the surrounding provisioning/audit does not.
+
+**Comparison (resource figures are CI measurements and the units' caps, NOT measurements on this VPS):**
+| | A: reuse :3001 behind guard | B: second FreeLLMAPI on :13001 |
+|---|---|---|
+| Existing services touched | yes: needs the production gateway's admin credentials, a new custom endpoint in its DB, audit `--auto-fix` may disable models SUPPAR uses | no |
+| Extra RAM (FreeLLMAPI part) | ~0 | ~65-81 MiB resident (CI), cap `MemoryMax` per unit file |
+| Whole new stack RAM | OmniRoute ~705-712 MiB + 2 guards | + FreeLLMAPI ~65-81 MiB; ~0.9 GiB typical, ~1.2 GiB at the unit caps, against 2,523 MB available and no swap |
+| Disk | OmniRoute + guards | + one FreeLLMAPI install (preflight requires >= 6 GB free; 16 GB reported) |
+| Scripts support it today | no (needs code + approval) | yes (`--freellmapi-port 13001`, tested in CI) |
+| Blast radius if it goes wrong | SUPPAR's gateway | only `/srv/llm` services |
+
+**Recommendation: B**, because A saves only ~65-81 MiB of RAM (about 3% of the available memory) but is the only option that modifies a service that is working. Even lower resource option, if wanted: **C, OmniRoute + its guard only** (OmniRoute alone reaches OVH anonymous through the `ovhanon` node), skipping the second FreeLLMAPI. Reuse is preferred wherever it is technically safe: the existing Docker daemon, Caddy and the system tools are reused unchanged (the toolkit installs its own pinned Node under `/srv/llm`, never system packages). The existing FreeLLMAPI container stays exactly as it is.
+
+**Practical risks for B (reasoned from the reported numbers, to be confirmed by the survey):** load 1.98 on 2 CPUs means installs (npm build) compete with SUPPAR; each unit has `CPUQuota=80%`, installs are niced, and the first install should run in a quiet period. 0 swap means a memory spike is fatal for something: the units have `MemoryMax` so the kernel kills the toolkit's service, not your containers, but the install step should only start with comfortable headroom (>= ~1.5 GiB available). The two warnings are unknown until the report text is seen.
+
+**Evidence still needed from the VPS (one read-only command; adds the container inspection, no env values, no file contents beyond a masked compose structure):**
+```
+bash vps/remote-survey.sh root@VPS_ADDRESS --freellmapi-port 13001 --omniroute-port 20128 --inspect-container suppar-freellmapi
+```
+It reports: image/tag/created, health, restart policy, memory/CPU limits, user, networks, port mappings, mounts, env var NAMES only, compose labels, health endpoint status codes, `docker stats` (all containers), `docker system df`, and the compose structure with environment blocks and key/token/secret/password lines hidden. What it cannot learn without admin credentials: which providers/keys the existing instance has configured (deliberately not read).
+
 ## Finding from auditing the scripts: the survey does not create the deploy gate files
 `remote-survey.sh` runs the preflight and inventory in a temp dir on the VPS and deletes it, so nothing is left behind (by design). But `deploy.sh users` (the first changing step) refuses to run unless `--preflight FILE` says `RESULT: PASS*`, is from this host and newer than 24 h, and `--baseline FILE` exists. So Stage A/B of `docs/VPS-DEPLOYMENT.md` must still be done once on the VPS: copy the verified release archive, extract it, run `preflight.sh --freellmapi-port 13001 --omniroute-port 20128 --out /root/llm-deploy/preflight.txt` and `inventory.sh snapshot ... --out /root/llm-deploy/baseline.snap`. These write only under `/root/llm-deploy/` (mode 0600). The survey result is evidence for the decision, not a substitute for those files.
 

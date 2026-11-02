@@ -2,7 +2,7 @@
 # Runs ON the VPS (started by remote-survey.sh). READ-ONLY: reads system state, writes only inside its own temp dir (arg 1), prints a report.
 # Never prints file contents of other services, environment variables, or secrets: names, ports, sizes and versions only.
 set -uo pipefail
-D="${1:?temp dir}"; FLP="${2:-3001}"; OMP="${3:-20128}"; GFL=3101; GOM=20228; cd "$D/vps" || exit 1
+D="${1:?temp dir}"; FLP="${2:-3001}"; OMP="${3:-20128}"; CNAME="${4:-}"; GFL=3101; GOM=20228; cd "$D/vps" || exit 1
 sec() { printf '\n=== %s ===\n' "$1"; }
 sec "HOST"
 echo "user=$(id -un) host=$(hostname) time=$(date -u +%FT%TZ)"; . /etc/os-release 2>/dev/null && echo "os=$PRETTY_NAME"; echo "kernel=$(uname -r) arch=$(uname -m) virt=$(systemd-detect-virt 2>/dev/null || echo unknown)"
@@ -21,6 +21,28 @@ echo "failed units: $(systemctl --failed --no-legend 2>/dev/null | wc -l)"
 echo "existing llm-* units: $(systemctl list-unit-files 2>/dev/null | awk '/^llm-/{print $1}' | tr '\n' ' ')"
 sec "DOCKER (names/images/ports only)"
 if command -v docker >/dev/null 2>&1; then docker ps --format '{{.Names}} | {{.Image}} | {{.Ports}}' 2>&1 | head -30; echo "volumes=$(docker volume ls -q 2>/dev/null | wc -l) networks=$(docker network ls -q 2>/dev/null | wc -l)"; else echo "docker not installed"; fi
+if [ -n "$CNAME" ] && command -v docker >/dev/null 2>&1; then
+sec "EXISTING CONTAINER $CNAME (read-only: no env values, no file contents beyond masked compose structure)"
+case "$CNAME" in *[!A-Za-z0-9_.-]*) echo "bad container name"; CNAME="";; esac
+fi
+if [ -n "$CNAME" ] && command -v docker >/dev/null 2>&1; then
+  docker inspect "$CNAME" --format 'image={{.Config.Image}}{{"\n"}}imageId={{.Image}}{{"\n"}}created={{.Created}}{{"\n"}}status={{.State.Status}} health={{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}} restarts={{.RestartCount}} started={{.State.StartedAt}}{{"\n"}}restartPolicy={{.HostConfig.RestartPolicy.Name}} memLimit={{.HostConfig.Memory}} nanoCpus={{.HostConfig.NanoCpus}}{{"\n"}}user={{.Config.User}} readonlyRootfs={{.HostConfig.ReadonlyRootfs}} privileged={{.HostConfig.Privileged}}{{"\n"}}networks={{range $k,$v := .NetworkSettings.Networks}}{{$k}} {{end}}{{"\n"}}ports={{json .NetworkSettings.Ports}}{{"\n"}}cmd={{json .Config.Cmd}} entrypoint={{json .Config.Entrypoint}}' 2>&1 | sed 's/^/  /'
+  echo "  mounts (type source -> destination):"; docker inspect "$CNAME" --format '{{range .Mounts}}    {{.Type}} {{.Source}} -> {{.Destination}} rw={{.RW}}{{"\n"}}{{end}}' 2>&1
+  echo "  environment variable NAMES only (values are never printed):"; docker inspect "$CNAME" --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null | cut -d= -f1 | sort | sed 's/^/    /'
+  echo "  labels (compose + image):"; docker inspect "$CNAME" --format '{{range $k,$v := .Config.Labels}}{{$k}}={{$v}}{{"\n"}}{{end}}' 2>/dev/null | grep -E '^(com\.docker\.compose\.(project|service|version)|org\.opencontainers\.image\.(version|title|source|revision))' | sed 's/^/    /'
+  echo "  live health endpoints on the published port (GET only):"
+  for ep in /api/ping /api/health /api/version; do printf '    %s -> ' "$ep"; curl -s -m5 -o /dev/null -w '%{http_code}' "http://127.0.0.1:3001$ep" 2>/dev/null || printf 'no answer'; echo; done
+  printf '    /api/ping body: '; curl -s -m5 "http://127.0.0.1:3001/api/ping" 2>/dev/null | head -c 200; echo
+  echo "  resource use now (docker stats, one sample, ALL containers):"; docker stats --no-stream --format '    {{.Name}}  mem={{.MemUsage}}  cpu={{.CPUPerc}}' 2>&1 | head -20
+  echo "  docker disk usage:"; docker system df 2>&1 | sed 's/^/    /'
+  cf=$(docker inspect "$CNAME" --format '{{index .Config.Labels "com.docker.compose.project.config_files"}}' 2>/dev/null | cut -d, -f1)
+  if [ -n "$cf" ] && [ -r "$cf" ]; then
+    echo "  compose file $cf: STRUCTURE ONLY (environment blocks and any line naming key/token/secret/password are hidden):"
+    awk '/^[[:space:]]*(environment|env_file|secrets|configs):/{skip=match($0,/[^ ]/); next} skip&&match($0,/[^ ]/)>skip{next} {skip=0; print}' "$cf" | sed -E 's/((key|token|secret|pass(word)?)[A-Za-z_]*[:=][[:space:]]*).*/\1<hidden>/I' | sed 's/^/    /' | head -60
+    echo "  env_file referenced: $(grep -cE '^[[:space:]]*env_file:' "$cf") (contents never read)"
+  else echo "  compose file not readable here ($cf)"; fi
+  echo "  host memory/disk headroom for the new stack: see RESOURCES above"
+fi
 sec "WHO OWNS PORT 3001 (docker, metadata only: no env vars, no file contents)"
 if command -v docker >/dev/null 2>&1; then
   ids=$(docker ps -q --filter publish=3001 2>/dev/null); [ -n "$ids" ] || echo "no running container publishes 3001"
