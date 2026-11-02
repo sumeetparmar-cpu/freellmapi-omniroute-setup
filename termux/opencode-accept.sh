@@ -19,7 +19,9 @@ bash "$HERE/gateways.sh" start >/dev/null || die "could not start the gateways: 
 # The guard logs are cumulative: remember where they end NOW so the end report shows only what THIS run caused.
 loglines() { wc -l < "$GW_LOG_DIR/free-guard-$1.log" 2>/dev/null || echo 0; }
 L_FL="$(loglines freellmapi)"; L_OR="$(loglines omniroute)"
-T="$(mktemp -d)"; trap 'rm -rf "$T"' EXIT
+# The project lives under the toolkit home, NOT in /tmp: inside the proot Debian, /tmp is a different mount than in Termux, so an absolute /tmp/... path
+# that the agent copies from a Glob result is judged "external_directory" by OpenCode and auto-rejected (seen on the phone with the 20B model).
+mkdir -p "$GW_HOME/tmp"; T="$(mktemp -d "$GW_HOME/tmp/accept.XXXXXX")"; trap 'rm -rf "$T"' EXIT
 P="$T/proj"; mkdir -p "$P"; cd "$P" || exit 1
 git init -q 2>/dev/null; git config user.email t@t.invalid; git config user.name t
 cat > math.js <<'JS'
