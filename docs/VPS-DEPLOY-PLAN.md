@@ -47,6 +47,26 @@ bash vps/remote-survey.sh root@VPS_ADDRESS --freellmapi-port 13001 --omniroute-p
 ```
 It reports: image/tag/created, health, restart policy, memory/CPU limits, user, networks, port mappings, mounts, env var NAMES only, compose labels, health endpoint status codes, `docker stats` (all containers), `docker system df`, and the compose structure with environment blocks and key/token/secret/password lines hidden. What it cannot learn without admin credentials: which providers/keys the existing instance has configured (deliberately not read).
 
+## Three-way architecture comparison (A reuse / B second FreeLLMAPI :13001 / C OmniRoute + guard only)
+Evidence level: reasoning from the repo's scripts and the owner-reported VPS facts. NOT yet backed by the container inspection (run `--forensic`, below). CI resource numbers are not VPS measurements.
+| Criterion | A reuse :3001 | B second :13001 | C OmniRoute + guard only |
+|---|---|---|---|
+| Security isolation | worst: shares a production gateway's DB and admin account | good: own user, own dir, own units | best: no second FreeLLMAPI at all |
+| SUPPAR compatibility | risk: audit `--auto-fix` may disable models SUPPAR uses; custom endpoint changes its DB | no interaction (own port, own data) | no interaction |
+| RAM | ~0 extra for FreeLLMAPI | + one FreeLLMAPI (CI: ~65-81 MiB RSS) | OmniRoute (CI ~705-712 MiB) + 1 guard |
+| Disk | OmniRoute + guards | + one FreeLLMAPI install | OmniRoute + 1 guard (smallest) |
+| Operational complexity | highest (needs new attach code, admin credentials of production) | medium (supported path) | lowest (one gateway to run and update) |
+| Reliability | coupled to SUPPAR's container lifecycle | independent units, `kill -9` recovery CI-tested | independent, fewest moving parts |
+| Zero-cost inference (OVH anonymous) | needs a change inside SUPPAR's gateway | yes (provisioning as on the phone) | yes (OmniRoute `ovhanon` custom node, proven on the phone) |
+| Maintenance | two things to keep compatible with SUPPAR | two gateways to update | one gateway |
+**Provisional recommendation: C if you only need the free OVH route on the VPS, B if you also want FreeLLMAPI there; never A.** The deciding facts (resource headroom on the real VPS, what the existing container is, the remaining warning) come from the forensic run.
+
+## Forensic run: ONE command from Termux (read-only except one report file under `/root/llm-deploy/`)
+```
+cd ~/freellmapi-omniroute-setup && git pull -q && bash vps/remote-survey.sh root@YOUR_REAL_ADDRESS --forensic --freellmapi-port 13001 --omniroute-port 20128
+```
+`--forensic` inspects `suppar-freellmapi` (override with `--inspect-container NAME`) and saves the whole report BOTH on the VPS (`/root/llm-deploy/vps-forensic-<UTC timestamp>.txt`, directory 0700, file 0600) and on the phone (`~/vps-survey-<timestamp>.txt`). Covers: container id/image/digest/version labels/health/restart/limits/user/networks/ports/mounts, env var NAMES only, compose project/service/working dir/config files, masked compose structure, health endpoint codes, per-container CPU/RAM, docker disk usage, host CPU/load/RAM/swap/disk, n8n/SUPPAR/EARNIX/Caddy/database containers and host services, non-loopback listeners and non-loopback docker ports, firewall listing, the preflight with port 13001, an inventory snapshot, and the exact preflight WARN/BLOCK lines. The only write on the VPS is the report file (plus a temp dir deleted at the end).
+
 ## Finding from auditing the scripts: the survey does not create the deploy gate files
 `remote-survey.sh` runs the preflight and inventory in a temp dir on the VPS and deletes it, so nothing is left behind (by design). But `deploy.sh users` (the first changing step) refuses to run unless `--preflight FILE` says `RESULT: PASS*`, is from this host and newer than 24 h, and `--baseline FILE` exists. So Stage A/B of `docs/VPS-DEPLOYMENT.md` must still be done once on the VPS: copy the verified release archive, extract it, run `preflight.sh --freellmapi-port 13001 --omniroute-port 20128 --out /root/llm-deploy/preflight.txt` and `inventory.sh snapshot ... --out /root/llm-deploy/baseline.snap`. These write only under `/root/llm-deploy/` (mode 0600). The survey result is evidence for the decision, not a substitute for those files.
 

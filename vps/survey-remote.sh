@@ -26,12 +26,14 @@ sec "EXISTING CONTAINER $CNAME (read-only: no env values, no file contents beyon
 case "$CNAME" in *[!A-Za-z0-9_.-]*) echo "bad container name"; CNAME="";; esac
 fi
 if [ -n "$CNAME" ] && command -v docker >/dev/null 2>&1; then
+  echo "  container id: $(docker inspect "$CNAME" --format '{{.Id}}' 2>/dev/null | cut -c1-12)"
+  img=$(docker inspect "$CNAME" --format '{{.Config.Image}}' 2>/dev/null); echo "  image repo digests: $(docker image inspect "$img" --format '{{json .RepoDigests}}' 2>/dev/null)"
   docker inspect "$CNAME" --format 'image={{.Config.Image}}{{"\n"}}imageId={{.Image}}{{"\n"}}created={{.Created}}{{"\n"}}status={{.State.Status}} health={{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}} restarts={{.RestartCount}} started={{.State.StartedAt}}{{"\n"}}restartPolicy={{.HostConfig.RestartPolicy.Name}} memLimit={{.HostConfig.Memory}} nanoCpus={{.HostConfig.NanoCpus}}{{"\n"}}user={{.Config.User}} readonlyRootfs={{.HostConfig.ReadonlyRootfs}} privileged={{.HostConfig.Privileged}}{{"\n"}}networks={{range $k,$v := .NetworkSettings.Networks}}{{$k}} {{end}}{{"\n"}}ports={{json .NetworkSettings.Ports}}{{"\n"}}cmd={{json .Config.Cmd}} entrypoint={{json .Config.Entrypoint}}' 2>&1 | sed 's/^/  /'
   echo "  mounts (type source -> destination):"; docker inspect "$CNAME" --format '{{range .Mounts}}    {{.Type}} {{.Source}} -> {{.Destination}} rw={{.RW}}{{"\n"}}{{end}}' 2>&1
   echo "  environment variable NAMES only (values are never printed):"; docker inspect "$CNAME" --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null | cut -d= -f1 | sort | sed 's/^/    /'
   echo "  labels (compose + image):"; docker inspect "$CNAME" --format '{{range $k,$v := .Config.Labels}}{{$k}}={{$v}}{{"\n"}}{{end}}' 2>/dev/null | grep -E '^(com\.docker\.compose\.(project|service|version)|org\.opencontainers\.image\.(version|title|source|revision))' | sed 's/^/    /'
   echo "  live health endpoints on the published port (GET only):"
-  for ep in /api/ping /api/health /api/version; do printf '    %s -> ' "$ep"; curl -s -m5 -o /dev/null -w '%{http_code}' "http://127.0.0.1:3001$ep" 2>/dev/null || printf 'no answer'; echo; done
+  for ep in /api/ping /api/health /api/version; do printf '    %s -> ' "$ep"; curl -s -m5 -o /dev/null -w '%{http_code}' "http://127.0.0.1:3001$ep" 2>/dev/null; echo; done
   printf '    /api/ping body: '; curl -s -m5 "http://127.0.0.1:3001/api/ping" 2>/dev/null | head -c 200; echo
   echo "  resource use now (docker stats, one sample, ALL containers):"; docker stats --no-stream --format '    {{.Name}}  mem={{.MemUsage}}  cpu={{.CPUPerc}}' 2>&1 | head -20
   echo "  docker disk usage:"; docker system df 2>&1 | sed 's/^/    /'
@@ -51,6 +53,13 @@ if command -v docker >/dev/null 2>&1; then
   done
   echo "all containers (name | status):"; docker ps -a --format '  {{.Names}} | {{.Status}}' 2>/dev/null | head -30
 else echo "docker not installed"; fi
+sec "SERVICES OF INTEREST (names/status/images/ports only)"
+if command -v docker >/dev/null 2>&1; then docker ps -a --format '{{.Names}} | {{.Image}} | {{.Status}} | {{.Ports}}' 2>/dev/null | grep -iE 'n8n|suppar|earnix|caddy|postgres|mysql|maria|mongo|redis|db' | sed 's/^/  /'; echo "  compose projects: $(docker ps -a --format '{{.Label "com.docker.compose.project"}}' 2>/dev/null | sort -u | grep . | tr '\n' ' ')"; fi
+for u in caddy nginx postgresql mysql mariadb mongod redis-server docker; do systemctl is-active "$u" >/dev/null 2>&1 && echo "  host service active: $u"; done
+sec "NETWORK EXPOSURE (non-loopback listeners; process names only)"
+ss -ltnp 2>/dev/null | awk 'NR>1 && $4 !~ /^(127\.|\[::1\])/ {print "  "$4"  "$NF}' | sed -E 's/users:\(\(("[^"]+").*/\1/' | head -30
+echo "  docker ports published on non-loopback addresses:"; docker ps --format '  {{.Names}} {{.Ports}}' 2>/dev/null | grep -E '0\.0\.0\.0|:::' | head -20
+echo "  swap: $(swapon --show --noheadings 2>/dev/null | wc -l) device(s); vm.swappiness=$(cat /proc/sys/vm/swappiness 2>/dev/null)"
 sec "FIREWALL (read-only listing)"
 echo "ufw: $(ufw status verbose 2>&1 | head -12 | tr '\n' ';')"
 command -v nft >/dev/null && echo "nft rule count: $(nft list ruleset 2>/dev/null | grep -c . )"
@@ -66,4 +75,6 @@ sec "TOOLKIT PREFLIGHT (read-only)"
 echo "preflight exit=$?"
 sec "TOOLKIT INVENTORY SNAPSHOT (identities only, stored in the temp dir)"
 ./inventory.sh snapshot --out "$D/baseline.snap" 2>&1 | tail -n 15
+sec "PREFLIGHT WARNINGS / BLOCKS (exact lines)"
+grep -E '^\[(WARN|BLOCK)' "$D/preflight.txt" 2>/dev/null | sed 's/^/  /'; grep -E '^(RESULT|pass=)' "$D/preflight.txt" 2>/dev/null | sed 's/^/  /'
 sec "END (temp dir will be removed)"
