@@ -33,7 +33,15 @@ cmd_config() {
   [ -s "$GW_CONFIG_DIR/guard-freellmapi.clientkey" ] && [ -s "$GW_CONFIG_DIR/guard-omniroute.clientkey" ] || die "guard keys missing: run termux/bootstrap.sh first"
   mkdir -p "$CFG_DIR" "$BIN_DIR"
   local new="$CFG.new"
-  FLP="$GUARD_PORT_FREELLMAPI" ORP="$GUARD_PORT_OMNIROUTE" FLM="$FL_MODEL" ORM="$OR_MODEL" node -e '
+  mkdir -p "$OC"
+  # Measured on the phone: the 20B model invents absolute paths and OpenCode rejects them (external_directory); with this rule the same task passed.
+  cat > "$OC/rules.md" <<'RULES'
+# File path rules (added by the free-only toolkit)
+- Always use paths RELATIVE to the current working directory (for example `math.js` or `src/app.js`) for every read, edit, glob and shell command.
+- Never type an absolute path. Never invent a directory name. If you are unsure where a file is, run glob or ls first and reuse the relative path it shows.
+RULES
+  chmod 600 "$OC/rules.md"
+  RULES="$OC/rules.md" FLP="$GUARD_PORT_FREELLMAPI" ORP="$GUARD_PORT_OMNIROUTE" FLM="$FL_MODEL" ORM="$OR_MODEL" node -e '
     const e = process.env;
     const model = (id, name) => ({ [id]: { name, tool_call: true, reasoning: true, limit: { context: 131072, output: 16384 } } });
     const cfg = {
@@ -42,6 +50,7 @@ cmd_config() {
       enabled_providers: ["freellmapi", "omniroute"],
       model: `omniroute/${e.ORM}`,   // the larger model: it fixed the acceptance bug, the 20B did not
       small_model: `freellmapi/${e.FLM}`,   // background chores (titles, summaries) must not use a default model of some other provider
+      instructions: [e.RULES],   // a plain markdown file inside the toolkit home: no secret, relative-path rule only
       share: "disabled", autoupdate: false,
       permission: { edit: "ask", bash: "ask", webfetch: "ask" },
       provider: {
