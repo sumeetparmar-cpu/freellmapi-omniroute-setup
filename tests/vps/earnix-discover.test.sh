@@ -50,6 +50,23 @@ env HOME="$T" SSH_BIN="$T/fakessh" EARNIX_ROOTS="$V" bash "$ROOT/vps/remote-surv
 t "wrapper runs the discovery and prints/saves it on the phone side" bash -c 'grep -q "first earnix commit" "$0" && ! grep -q PLANTED_SECRET "$0"' "$T/phone.txt"
 t "wrapper keeps a copy on the VPS side (falls back to HOME/llm-deploy when not root)" bash -c 'ls "$0"/llm-deploy/earnix-discovery-*.txt >/dev/null 2>&1 || ls /root/llm-deploy/earnix-discovery-*.txt >/dev/null 2>&1' "$T"
 rm -f /root/llm-deploy/earnix-discovery-*.txt 2>/dev/null
+echo "# earnix-db-inspect.sh (snapshot comparison; sqlite3 is available in this test only when installed)"
+if command -v sqlite3 >/dev/null 2>&1; then
+  mkdir -p "$V/opt/vyora-workspace/backups"; B="$V/opt/vyora-workspace/backups"
+  sqlite3 "$B/earnix-old.sqlite" "create table agents(id integer,name text,status text,updated_at text); create table api_keys(k text); insert into agents values(1,'PLANTED_NAME_A','draft','2026-01-01'),(2,'PLANTED_NAME_B','draft','2026-01-02'); insert into api_keys values('PLANTED_SECRET_SEVEN');"
+  sqlite3 "$B/earnix-new.sqlite" "create table agents(id integer,name text,status text,updated_at text); create table api_keys(k text); insert into agents values(1,'PLANTED_NAME_A','active','2026-03-01'),(2,'PLANTED_NAME_B','active','2026-03-02'),(3,'PLANTED_NAME_C','draft','2026-03-03'); insert into api_keys values('PLANTED_SECRET_SEVEN');"
+  DB0="$(cd "$V" && find . -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum)"
+  bash "$ROOT/vps/earnix-db-inspect.sh" "$B" > "$T/db.txt" 2>&1
+  DB1="$(cd "$V" && find . -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum)"
+  t "lists both snapshots with size, time and checksum"          bash -c 'grep -c "sqlite " "$0" | grep -q "^2$" && grep -q "sha256:" "$0"' "$T/db.txt"
+  t "row counts and newest timestamp per snapshot"               bash -c 'grep -q "agents  *rows=3 .*updated_at.max=2026-03-03" "$0" && grep -q "agents  *rows=2 .*updated_at.max=2026-01-02" "$0"' "$T/db.txt"
+  t "agent table: columns and counts per status, no names"      bash -c 'grep -q "columns = id, name, status, updated_at" "$0" && grep -q "by status: active=2 draft=1" "$0"' "$T/db.txt"
+  t "ranking puts the newest snapshot first"                     bash -c 'awk "/^=== RANKING/{f=1;next} f" "$0" | grep -m1 -q "1\. newest=2026-03-03.*earnix-new.sqlite"' "$T/db.txt"
+  t "no row content or secret printed"                           bash -c '! grep -qE "PLANTED_NAME|PLANTED_SECRET" "$0"' "$T/db.txt"
+  t "READ-ONLY: snapshots and the whole tree byte-identical after" bash -c '[ "$1" = "$2" ]' _ "$DB0" "$DB1"
+  env HOME="$T" SSH_BIN="$T/fakessh" LLM_VPS_TARGET_FILE="$T/mem2" bash "$ROOT/vps/remote-survey.sh" me@host --earnix-db "$B" --out "$T/dbphone.txt" > /dev/null 2>&1
+  t "wrapper --earnix-db runs it and returns the report"        bash -c 'grep -q "RANKING" "$0" && ! grep -q PLANTED "$0"' "$T/dbphone.txt"
+fi
 echo "# placeholder guard and remembered login"
 t "a placeholder address is refused before any connection"  bash -c '! env HOME="$1" SSH_BIN="$1/fakessh" bash "$0/vps/remote-survey.sh" root@YOUR_REAL_ADDRESS --earnix 2>&1 | grep -q "connecting"; env HOME="$1" SSH_BIN="$1/fakessh" bash "$0/vps/remote-survey.sh" root@YOUR_REAL_ADDRESS --earnix 2>&1 | grep -q "placeholder"' "$ROOT" "$T"
 t "'last' with nothing remembered says so"                   bash -c 'env HOME="$1" LLM_VPS_TARGET_FILE="$1/none" SSH_BIN="$1/fakessh" bash "$0/vps/remote-survey.sh" last --earnix 2>&1 | grep -q "no remembered login"' "$ROOT" "$T"
