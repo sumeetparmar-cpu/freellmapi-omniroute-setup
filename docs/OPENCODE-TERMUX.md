@@ -79,6 +79,12 @@ Live check 2026-11-03 (sandbox, opencode.ai reachable):
   shows the message. Nothing was subscribed or paid. Whether your phone or VPS gets a working free allowance is NOT verified.
 - OpenCode refreshes its catalog from `models.opencode.ai`. With that host reachable it fetched a fresh catalog (47 zero-cost `opencode`
   entries) and still offered the same 9 models, and opencode.ai still answered `Free usage limit reached`.
+- **Your Hostinger VPS (2026-11-03, own address, Ubuntu 26.04 x86-64):** the same minimal install (OpenCode 1.19.5, sha512 verified, isolated
+  `~/opencode-zen` profile, nothing else touched) got the same `Free usage limit reached` answer. So it is not only the shared sandbox address.
+- OpenCode's docs (opencode.ai/docs/zen, read 2026-11-03): "Free-tier chat models require OpenCode; use paid models or Go from other
+  clients." The free models are free "for a limited time"; the free allowance itself is not published. Privacy differs per model:
+  `deepseek-v4.1-flash-free` and `glm-5.3-flash-free` are zero-retention and not used for training; Big Pickle, MiMo, Nemotron, Flint and
+  Pulse Alpha may use your data to improve the model (Nemotron 3 Ultra: trial use only). The server's only suggestion is paid OpenCode Go.
 Tests: `tests/termux/opencode-zen.test.sh` (16).
 
 ## 5b. First acceptance run on the phone (2026-10-31, Android 16, OpenCode 1.19.5 via proot-distro Debian)
