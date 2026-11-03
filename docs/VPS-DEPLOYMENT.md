@@ -28,7 +28,9 @@ unit, no Caddy/Docker/firewall change, nothing of SUPPAR/EARNIX/n8n touched. The
 1. Read-only checks (as root): ports 3001/3101/20128/20228 free (else pass `FREELLMAPI_PORT` / `OMNIROUTE_PORT` / `GUARD_PORT_*` to the
    bootstrap), about 8 GB free disk, about 2 GB free RAM, `git curl python3 tar` present. Create `/root/.ssh/llm_toolkit_deploy` and add its
    `.pub` as a read-only deploy key in the repository settings.
-2. As root: clone the branch to `/root/llm-toolkit` with that key; `useradd -m llmgw`; copy the toolkit to `/home/llmgw/toolkit`; as `llmgw`:
+2. As root: clone the branch to `/root/llm-toolkit` with that key; create `llmgw` with a UID that NO running process uses (`useradd -m -u <uid>`;
+   a plain `useradd` takes 1000, which Docker containers such as n8n often run as, so `llmgw` would share their identity: found on a real VPS);
+   copy the toolkit to `/home/llmgw/toolkit`; as `llmgw`:
    install the pinned Node 24.11.0 (sha256 pinned in vps/lib/vps-common.sh), then `bash ~/toolkit/termux/bootstrap.sh --no-boot` (ends with real free inference).
 3. Claude Code as root, from root's OWN toolkit copy and config folder (the service user must not control either):
    `CLAUDE_FREE_CONFIG_DIR=/root/.claude-free GW_HOME=/home/llmgw/llm-gateways bash /root/llm-toolkit/termux/claude-free.sh`

@@ -21,6 +21,10 @@ PORT="$OMNIROUTE_PORT"
 BASE_URL="http://127.0.0.1:$PORT"
 ENTRY="$PREFIX/node_modules/omniroute/bin/omniroute.mjs"
 ALLOW_SCRIPTS="omniroute,keytar,onnxruntime-node,@parcel/watcher,@swc/core,protobufjs,esbuild"
+# onnxruntime-node (an OmniRoute dependency) otherwise downloads optional CUDA GPU binaries from NuGet during install and rebuild:
+# hundreds of MB, useless without an NVIDIA GPU, and with no timeout it hung for 6+ hours on a VPS. Its CPU runtime ships inside the
+# package. Set ONNXRUNTIME_NODE_INSTALL yourself (e.g. cuda12) to override.
+export ONNXRUNTIME_NODE_INSTALL="${ONNXRUNTIME_NODE_INSTALL:-skip}"
 
 usage() {
   sed -n '2,8p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
