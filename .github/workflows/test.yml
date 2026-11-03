@@ -14,7 +14,7 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: '24' }
       - name: shellcheck
-        run: shellcheck -x -S warning termux/*.sh termux/lib/common.sh tests/termux/*.sh scripts/*.sh vps/*.sh vps/lib/*.sh tests/vps/*.sh
+        run: shellcheck -x -S warning termux/*.sh termux/lib/common.sh tests/termux/*.sh scripts/*.sh vps/*.sh vps/lib/*.sh tests/vps/*.sh tests/claude-endpoint/*.sh
       - name: secret scan
         run: scripts/check-secrets.sh
       - name: Termux script tests (run on Linux)
@@ -56,3 +56,19 @@ jobs:
         with: { node-version: '24' }
       - name: End-to-end rehearsal (pinned Node download, both real installs, quota-report, backup, verify)
         run: sudo env PATH="$PATH" LLM_TEST_ALLOW_SYSTEM_CHANGES=1 bash tests/vps/e2e-sandbox.sh
+
+  # Real installs of both gateways in a throwaway GW_HOME, tested over /v1/messages (what Claude Code uses) against a local mock upstream.
+  claude-endpoint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '24' }
+      - name: Install both gateways (throwaway GW_HOME)
+        run: |
+          export GW_HOME="$RUNNER_TEMP/gw"
+          termux/freellmapi.sh install --yes
+          termux/omniroute.sh install --yes
+      - name: Claude-endpoint tests (mock upstream only)
+        run: LLM_CE_SANDBOX=1 GW_HOME="$RUNNER_TEMP/gw" bash tests/claude-endpoint/run.sh both
