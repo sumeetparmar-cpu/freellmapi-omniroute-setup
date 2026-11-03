@@ -21,6 +21,20 @@ Users `llmfree` and `llmomni`: system accounts, shell `/usr/sbin/nologin`, in no
 Each service can write only to its own directory (`ProtectSystem=strict`, `ReadWritePaths=` one path), runs with no capabilities, no new privileges, memory/CPU capped, lower
 scheduling priority than your existing services, and listens on `127.0.0.1` only.
 
+## Quick path (phone-friendly): one service user + the bootstrap
+For a free-only setup without the full runbook below: the gateways, the keyless OVH route and the free-only guards run as ONE unprivileged
+user (`llmgw`, no sudo) via `termux/bootstrap.sh` (tested on Ubuntu 24.04/26.04 in CI: job `termux-bootstrap`). Loopback only, no systemd
+unit, no Caddy/Docker/firewall change, nothing of SUPPAR/EARNIX/n8n touched. The toolkit comes from GitHub with a read-only **deploy key**.
+1. Read-only checks (as root): ports 3001/3101/20128/20228 free (else pass `FREELLMAPI_PORT` / `OMNIROUTE_PORT` / `GUARD_PORT_*` to the
+   bootstrap), about 8 GB free disk, about 2 GB free RAM, `git curl python3 tar` present. Create `/root/.ssh/llm_toolkit_deploy` and add its
+   `.pub` as a read-only deploy key in the repository settings.
+2. As root: clone the branch to `/root/llm-toolkit` with that key; `useradd -m llmgw`; copy the toolkit to `/home/llmgw/toolkit`; as `llmgw`:
+   install the pinned Node 24.11.0 (sha256 pinned in vps/lib/vps-common.sh), then `bash ~/toolkit/termux/bootstrap.sh --no-boot` (ends with real free inference).
+3. Claude Code as root, from root's OWN toolkit copy and config folder (the service user must not control either):
+   `CLAUDE_FREE_CONFIG_DIR=/root/.claude-free GW_HOME=/home/llmgw/llm-gateways bash /root/llm-toolkit/termux/claude-free.sh`
+After a reboot: `runuser -u llmgw -- bash /home/llmgw/toolkit/termux/gateways.sh start`. Undo: `runuser -u llmgw -- bash
+/home/llmgw/toolkit/termux/gateways.sh stop; userdel -r llmgw; rm -rf /root/llm-toolkit /root/.claude-free`, and delete the deploy key.
+
 ## Stages and approval gates
 
 Replace `VPS` with your host. Use a fresh root shell; nothing here needs a reboot.

@@ -10,7 +10,8 @@
 #   Anything else is passed to claude, e.g.:  bash termux/claude-free.sh -p "explain this repo"
 #
 # Needs bootstrap.sh done (guards running, client keys in $GW_HOME/config/guard-<gateway>.clientkey) and Claude Code installed.
-# Isolation: CLAUDE_CONFIG_DIR=$GW_HOME/claude-code, so your normal ~/.claude (login, settings, history) is not read or changed.
+# Isolation: CLAUDE_CONFIG_DIR=$GW_HOME/claude-code (or CLAUDE_FREE_CONFIG_DIR), so your normal ~/.claude is not read or changed. It must sit in a
+# folder YOU own: when root uses gateways run by a service user, set CLAUDE_FREE_CONFIG_DIR=$HOME/.claude-free (that user must not control it).
 # Your real Anthropic/Bedrock/Vertex credentials are removed from Claude Code's environment so they can never reach the gateway; the
 # guard key travels only in the environment (never on a command line) and Anthropic telemetry/update traffic is switched off.
 # OVH's keyless route allows 2 requests/minute/model: Claude Code then waits and retries by itself (HTTP 429 + retry-after).
@@ -54,13 +55,19 @@ case "$code" in
   *) die "the $GW guard on $BASE answered HTTP $code to GET /v1/models" ;;
 esac
 
+# Claude Code runs hooks and settings from its config folder: a folder another user can write would let that user run commands as you.
+CFGDIR="${CLAUDE_FREE_CONFIG_DIR:-$GW_HOME/claude-code}"
+mine() { [ "$(stat -c %u "$1" 2>/dev/null)" = "$(id -u)" ]; }
+[ -d "$(dirname "$CFGDIR")" ] && mine "$(dirname "$CFGDIR")" || die "Claude Code's config folder must be inside a folder you own ($(dirname "$CFGDIR")); set CLAUDE_FREE_CONFIG_DIR, e.g. CLAUDE_FREE_CONFIG_DIR=\$HOME/.claude-free"
+[ ! -e "$CFGDIR" ] || mine "$CFGDIR" || die "$CFGDIR belongs to another user; use a folder you own (CLAUDE_FREE_CONFIG_DIR)"
+
 command -v claude >/dev/null 2>&1 || die "Claude Code is not installed ('claude' not found); see https://code.claude.com/docs/en/setup"
 
 # Nothing from your own Claude Code setup may leak into this one: credentials, providers, custom headers, config dir.
 for v in $(compgen -e); do
   case "$v" in ANTHROPIC_*|CLAUDE_CODE_USE_*|CLAUDE_CODE_OAUTH_TOKEN|CLAUDE_CODE_API_KEY_*|AWS_BEARER_TOKEN_BEDROCK|CLAUDE_CONFIG_DIR) unset "$v" ;; esac
 done
-export CLAUDE_CONFIG_DIR="$GW_HOME/claude-code"
+export CLAUDE_CONFIG_DIR="$CFGDIR"
 ( umask 077; mkdir -p "$CLAUDE_CONFIG_DIR" ); chmod 700 "$CLAUDE_CONFIG_DIR"
 export ANTHROPIC_BASE_URL="$BASE" ANTHROPIC_AUTH_TOKEN="$KEY"
 # Every model slot (main, opus/sonnet/haiku aliases, background tasks, subagents) points at the one free model.

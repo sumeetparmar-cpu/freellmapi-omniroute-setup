@@ -63,4 +63,15 @@ ck "a key the guard rejects stops before claude starts" bash -c "rm -f '$TMP/cla
 cp -p "$TMP/right" "$GW_HOME/config/guard-freellmapi.clientkey"; chmod 644 "$GW_HOME/config/guard-freellmapi.clientkey"
 ck "a key file others can read is refused"             bash -c "! bash '$L' --check"
 chmod 600 "$GW_HOME/config/guard-freellmapi.clientkey"
-ck "missing claude is reported, not crashed"           bash -c "out=\$(PATH=/usr/bin:/bin:\$(dirname \"\$(command -v node)\") bash '$L' -p x 2>&1); [ \$? -ne 0 ] && echo \"\$out\" | grep -q 'Claude Code is not installed'"
+mkdir -p "$TMP/nodeonly"; ln -sf "$(command -v node)" "$TMP/nodeonly/node"   # only node: its folder may also hold a real claude
+ck "missing claude is reported, not crashed"           bash -c "out=\$(PATH=/usr/bin:/bin:'$TMP/nodeonly' bash '$L' -p x 2>&1); [ \$? -ne 0 ] && echo \"\$out\" | grep -q 'Claude Code is not installed'"
+
+# config folder ownership: another user must not be able to plant settings/hooks that Claude Code would run as you
+mkdir -p "$TMP/mine"
+ck "CLAUDE_FREE_CONFIG_DIR is used (mode 700)"          bash -c "PATH='$TMP/bin':\$PATH CLAUDE_FREE_CONFIG_DIR='$TMP/mine/cc' bash '$L' -p x && grep -q '^CLAUDE_CONFIG_DIR=$TMP/mine/cc$' '$TMP/claude.env' && [ \"\$(stat -c %a '$TMP/mine/cc')\" = 700 ]"
+if [ "$(id -u)" = 0 ]; then mkdir -p "$TMP/foreign" && chown 65534 "$TMP/foreign"; FOREIGN="$TMP/foreign"; else FOREIGN=""; fi   # as non-root, / belongs to someone else
+ck "a config folder inside another user's folder is refused (claude never starts)" bash -c "rm -f '$TMP/claude.env'; ! PATH='$TMP/bin':\$PATH CLAUDE_FREE_CONFIG_DIR='$FOREIGN/cc-free-test' bash '$L' -p x && [ ! -e '$TMP/claude.env' ] && [ ! -e '$FOREIGN/cc-free-test' ]"
+if [ "$(id -u)" = 0 ]; then
+  mkdir -p "$TMP/mine/theirs" && chown 65534 "$TMP/mine/theirs"
+  ck "an existing config folder owned by another user is refused" bash -c "! PATH='$TMP/bin':\$PATH CLAUDE_FREE_CONFIG_DIR='$TMP/mine/theirs' bash '$L' -p x"
+fi
