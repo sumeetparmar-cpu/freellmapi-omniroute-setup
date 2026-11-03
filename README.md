@@ -67,6 +67,7 @@ git clone <this repo> && cd freellmapi-omniroute-setup
 **One command, both gateways, free-only guards, real inference test: docs/PHONE-TERMUX.md** (Linux-tested; not yet run on a phone).
 **Claude Code on the free models, through the guard: `bash termux/claude-free.sh` (docs/CLAUDE-CODE.md).**
 **OpenCode on the same guards: `bash termux/opencode-install.sh` (phone or any x64/arm64 Linux; docs/OPENCODE-TERMUX.md).**
+**OpenCode's own free models, as a separate profile: `bash termux/opencode-setup.sh zen-config`, then `opencode-zen-free`.**
 
 Dashboards: `http://127.0.0.1:3001` (FreeLLMAPI: create the first account, add provider keys, copy the
 unified key) and `http://127.0.0.1:20128` (OmniRoute: `./termux/omniroute.sh credentials` prints the

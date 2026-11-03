@@ -55,6 +55,24 @@ runner, not the model); the 120B reviewer REJECTed the known-bad and APPROVEd th
 non-enabled provider, the guard refuses `openai/gpt-4o` and `anthropic/claude-sonnet-4-5` with 403). The guards held OVH's 2/minute
 limit locally 9 times (slow, not paid). Tests: `tests/termux/opencode-install.test.sh` (x64 package checks, native choice, honest failure).
 
+## 5c. OpenCode's own free models: a second, separate profile (`opencode-zen-free`)
+```
+bash termux/opencode-setup.sh zen-config          # writes the profile + $GW_HOME/bin/opencode-zen-free (needs opencode-install.sh first)
+bash termux/opencode-setup.sh zen-check
+$GW_HOME/bin/opencode-zen-free models opencode    # what OpenCode offers for free today
+$GW_HOME/bin/opencode-zen-free                    # OpenCode with only those models; pin one: ZEN_MODEL=opencode/<id> ... zen-config
+```
+**How it stays free:** OpenCode's own provider runs anonymously when it finds no key, no saved login and no apiKey; then OpenCode itself
+deletes every model whose price is not 0 and uses the public key (read in the 1.19.5 source). The profile keeps it there: its own
+config/data/cache/state directories (no saved Zen login or global config of yours can reach it), the launcher removes `OPENCODE_*`,
+`ANTHROPIC_*`, `OPENAI_*`, `*_API_KEY` and `*_GUARD_KEY` from the process, and `zen-check` (run by the launcher before every start) refuses
+a saved login, an apiKey or any other enabled provider.
+**Different from `opencode-free`:** requests go straight to opencode.ai, not through the free-only guards (not counted or limited by them);
+OpenCode's own terms for its free models apply, including how they use your data; the free list changes over time.
+Status 2026-11-03 (sandbox): profile created, `zen-check` PASS, the guarded profile unchanged; offline, OpenCode lists 9 free models from
+its bundled catalog (e.g. `deepseek-v4.1-flash-free`, `glm-5.3-flash-free`). **Not yet verified live:** a real request was refused by
+this sandbox's network policy (`Proxy refused to open a tunnel: 403` for opencode.ai). Tests: `tests/termux/opencode-zen.test.sh` (16).
+
 ## 5b. First acceptance run on the phone (2026-10-31, Android 16, OpenCode 1.19.5 via proot-distro Debian)
 7 passed, 1 failed, with two weak checks found in my own script (fixed afterwards, to be re-run):
 * OpenCode started, used only our two guarded providers, and ran real tool loops (read, edit, run) through both gateways: exit 0 each.
