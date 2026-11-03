@@ -31,11 +31,23 @@ unit, no Caddy/Docker/firewall change, nothing of SUPPAR/EARNIX/n8n touched. The
 2. As root: clone the branch to `/root/llm-toolkit` with that key; create `llmgw` with a UID that NO running process uses (`useradd -m -u <uid>`;
    a plain `useradd` takes 1000, which Docker containers such as n8n often run as, so `llmgw` would share their identity: found on a real VPS);
    copy the toolkit to `/home/llmgw/toolkit`; as `llmgw`:
-   install the pinned Node 24.11.0 (sha256 pinned in vps/lib/vps-common.sh), then `bash ~/toolkit/termux/bootstrap.sh --no-boot` (ends with real free inference).
+   install the pinned Node 24.11.0 into `~/node-v24.11.0-linux-x64` (official tarball, sha256 pinned in vps/lib/vps-common.sh), put its `bin`
+   first on `PATH`, then `bash ~/toolkit/termux/bootstrap.sh --no-boot` (ends with real free inference).
 3. Claude Code as root, from root's OWN toolkit copy and config folder (the service user must not control either):
    `CLAUDE_FREE_CONFIG_DIR=/root/.claude-free GW_HOME=/home/llmgw/llm-gateways bash /root/llm-toolkit/termux/claude-free.sh`
-After a reboot: `runuser -u llmgw -- bash /home/llmgw/toolkit/termux/gateways.sh start`. Undo: `runuser -u llmgw -- bash
-/home/llmgw/toolkit/termux/gateways.sh stop; userdel -r llmgw; rm -rf /root/llm-toolkit /root/.claude-free`, and delete the deploy key.
+   (a two-line `/usr/local/bin/claude-free` that exports those two variables and `exec`s the script makes this a plain `claude-free` command;
+   `claude-free --gateway omniroute` uses the OmniRoute guard and `ovhanon/gpt-oss-120b` instead of FreeLLMAPI and `gpt-oss-20b`).
+4. The gateways need that Node on `PATH`, so after a reboot start them with
+   `runuser -l llmgw -c 'PATH=$HOME/node-v24.11.0-linux-x64/bin:$PATH bash ~/toolkit/termux/gateways.sh start'`. To have this happen on its
+   own, add ONE line to root's crontab (a manual, optional step of this quick path; the full runbook below uses systemd and never runs `crontab`):
+   `@reboot sleep 30; runuser -l llmgw -c 'PATH=$HOME/node-v24.11.0-linux-x64/bin:$PATH bash ~/toolkit/termux/gateways.sh start' >> /home/llmgw/boot.log 2>&1`
+
+Undo: the same `runuser` command with `stop` instead of `start`; remove the `@reboot` line (`crontab -e`); `userdel -r llmgw;
+rm -rf /root/llm-toolkit /root/.claude-free /usr/local/bin/claude-free`; delete the deploy key.
+
+Verified on a live VPS that already runs other Docker services (2026-11-03, toolkit commit `cf2dbd9`): both gateways PASS with a real
+request, the gateways and guards listen on 127.0.0.1, and Claude Code through `claude-free` answered via the FreeLLMAPI guard (`gpt-oss-20b`).
+Not yet tried there: a reboot, and Claude Code through the OmniRoute guard.
 
 ## Stages and approval gates
 
