@@ -11,6 +11,17 @@
 #   ./tv.sh install <file.apk>      sideload an app
 #   ./tv.sh shell [cmd...]          raw adb shell on the TV
 #
+# Look & feel (all reversible):
+#   ./tv.sh launcher list|current          home-screen apps / the one in use
+#   ./tv.sh launcher install <file.apk>    sideload a launcher (FLauncher, Projectivy, Wolf Launcher...)
+#   ./tv.sh launcher set <package>         make it the default home screen (remembers the previous one)
+#   ./tv.sh launcher restore               go back to the remembered original launcher
+#   ./tv.sh animations fast|off|default|show   window/transition/animator speed (fast = 0.5x, off = 0x)
+#   ./tv.sh debloat list                   enabled system apps (candidates)
+#   ./tv.sh debloat disabled               apps this tool or you disabled
+#   ./tv.sh debloat disable <package>...   hide an app (pm disable-user; undo with enable). Core/launcher packages are refused
+#   ./tv.sh debloat enable <package>...    bring it back
+#
 # Uses the saved address, or TV_ADDR=ip:port. Talks only to the TV on your LAN.
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -18,7 +29,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$HERE/lib/common.sh"
 TV_CONFIG="${TV_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/tv-addr}"
 
-usage() { sed -n '2,15p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,25p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 need_adb() { have adb || die "adb not found (Termux: pkg install android-tools)"; }
 
 # Accept only ip-or-hostname[:port]; nothing else reaches adb.
@@ -44,6 +55,76 @@ cmd_connect() {
   info "connected to $a"
 }
 
+# ---- look & feel ----
+valid_pkg() { [[ "$1" =~ ^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z0-9_]+)+$ ]]; }
+LAUNCHER_STATE="${TV_LAUNCHER_STATE:-${XDG_CONFIG_HOME:-$HOME/.config}/tv-launcher-prev}"
+# Packages that must never be disabled: the system itself, settings, Play services/store, setup, input and the active launcher.
+protected_pkg() {
+  case "$1" in
+    android|com.android.systemui|com.android.settings|com.android.providers.*|com.android.inputmethod.*|com.android.vending|com.google.android.gms|com.google.android.gsf|com.google.android.tvlauncher|com.google.android.tvrecommendations|com.google.android.permissioncontroller|com.android.permissioncontroller|com.google.android.packageinstaller|com.android.packageinstaller|com.google.android.tv.remote.service|com.google.android.leanbacklauncher|com.google.android.setupwraith|com.google.android.apps.tv.launcherx) return 0 ;;
+  esac
+  [ "$1" = "$(current_launcher_pkg 2>/dev/null)" ]
+}
+home_components() { adbtv shell cmd package query-activities --brief -a android.intent.action.MAIN -c android.intent.category.HOME | tr -d '\r' | grep -E '^[A-Za-z0-9_.]+/' || true; }
+current_component() { adbtv shell cmd package resolve-activity --brief -a android.intent.action.MAIN -c android.intent.category.HOME | tr -d '\r' | grep -E '^[A-Za-z0-9_.]+/' | tail -n1; }
+current_launcher_pkg() { local c; c="$(current_component)"; echo "${c%%/*}"; }
+
+cmd_launcher() {
+  local sub="${1:-}"; [ $# -gt 0 ] && shift
+  case "$sub" in
+    list)    home_components ;;
+    current) current_component ;;
+    install) [ $# -eq 1 ] && [ -f "$1" ] || die "usage: tv.sh launcher install <file.apk>"; adbtv install -r "$1" ;;
+    set)
+      [ $# -eq 1 ] && valid_pkg "$1" || die "usage: tv.sh launcher set <package>  (see 'launcher list')"
+      local comp; comp="$(home_components | grep -F "$1/" | head -n1)"
+      [ -n "$comp" ] || die "$1 has no home activity. Install it first and check 'launcher list'"
+      local cur; cur="$(current_component)"
+      if [ -n "$cur" ] && [ "${cur%%/*}" != "$1" ]; then
+        mkdir -p "$(dirname "$LAUNCHER_STATE")"; printf '%s\n' "$cur" > "$LAUNCHER_STATE"; chmod 600 "$LAUNCHER_STATE"
+      fi
+      adbtv shell cmd package set-home-activity --user 0 "$comp" >/dev/null
+      adbtv shell input keyevent 3
+      info "default launcher: $comp (original saved; './tv.sh launcher restore' undoes it)" ;;
+    restore)
+      [ -f "$LAUNCHER_STATE" ] || die "no original launcher saved yet"
+      local prev; prev="$(head -n1 "$LAUNCHER_STATE")"; [[ "$prev" =~ ^[A-Za-z0-9_.]+/[A-Za-z0-9_.$]+$ ]] || die "saved launcher entry looks wrong: $prev"
+      adbtv shell cmd package set-home-activity --user 0 "$prev" >/dev/null; adbtv shell input keyevent 3
+      info "restored launcher: $prev" ;;
+    *) die "usage: tv.sh launcher list|current|install <apk>|set <package>|restore" ;;
+  esac
+}
+
+cmd_animations() {
+  local v
+  case "${1:-}" in
+    fast) v=0.5 ;; off) v=0 ;; default) v=1 ;;
+    show) local k; for k in window_animation_scale transition_animation_scale animator_duration_scale; do printf '%s=%s\n' "$k" "$(adbtv shell settings get global "$k" | tr -d '\r')"; done; return 0 ;;
+    *) die "usage: tv.sh animations fast|off|default|show" ;;
+  esac
+  local k; for k in window_animation_scale transition_animation_scale animator_duration_scale; do adbtv shell settings put global "$k" "$v"; done
+  info "animation scale set to ${v}x"
+}
+
+cmd_debloat() {
+  local sub="${1:-}"; [ $# -gt 0 ] && shift
+  case "$sub" in
+    list)     adbtv shell pm list packages -s -e | tr -d '\r' | sed 's/^package://' | sort ;;
+    disabled) adbtv shell pm list packages -d | tr -d '\r' | sed 's/^package://' | sort ;;
+    disable)
+      [ $# -ge 1 ] || die "usage: tv.sh debloat disable <package>..."
+      local p; for p in "$@"; do
+        valid_pkg "$p" || { warn "skipped (bad package name): $p"; continue; }
+        protected_pkg "$p" && { warn "skipped (protected core/launcher package): $p"; continue; }
+        adbtv shell pm disable-user --user 0 "$p" && info "disabled $p (undo: debloat enable $p)"
+      done ;;
+    enable)
+      [ $# -ge 1 ] || die "usage: tv.sh debloat enable <package>..."
+      local p; for p in "$@"; do valid_pkg "$p" || { warn "skipped (bad package name): $p"; continue; }; adbtv shell pm enable "$p"; done ;;
+    *) die "usage: tv.sh debloat list|disabled|disable <package>...|enable <package>..." ;;
+  esac
+}
+
 main() {
   local c="${1:-}"; [ $# -gt 0 ] && shift
   case "$c" in ""|-h|--help|help) usage; return 0 ;; esac
@@ -62,6 +143,9 @@ main() {
     apps)       adbtv shell pm list packages -3 | sed 's/^package://' ;;
     install)    [ $# -eq 1 ] && [ -f "$1" ] || die "usage: tv.sh install <file.apk>"; adbtv install -r "$1" ;;
     shell)      adbtv shell "$@" ;;
+    launcher)   cmd_launcher "$@" ;;
+    animations) cmd_animations "$@" ;;
+    debloat)    cmd_debloat "$@" ;;
     *)          usage; die "unknown command: $c" ;;
   esac
 }
