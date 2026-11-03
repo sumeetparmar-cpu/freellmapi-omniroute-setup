@@ -1,0 +1,91 @@
+{
+  "version": 1,
+  "verifiedOn": "2026-10-30",
+  "limitsNote": "limits are SELF-IMPOSED local ceilings used by the guard (rpm/rpd); only OVH (2 rpm/IP/model) and Groq (30 rpm, 1K rpd for gpt-oss) are published numbers, the rest are conservative estimates.",
+  "principle": "Allowlist only. A model not listed here is blocked (no paid fallback, no 'auto' unless the gateway catalog was pruned by 'free-policy apply').",
+  "sources": {
+    "groq": ["https://console.groq.com/docs/rate-limits", "https://console.groq.com/docs/billing-faqs", "https://console.groq.com/docs/your-data"],
+    "google": ["https://ai.google.dev/gemini-api/docs/pricing", "https://ai.google.dev/gemini-api/docs/rate-limits", "https://ai.google.dev/gemini-api/terms"],
+    "mistral": ["https://docs.mistral.ai/getting-started/quickstarts/studio/activate-and-generate-api-key", "https://help.mistral.ai/en/articles/698531-why-am-i-hitting-api-rate-limits-and-how-do-i-increase-them", "https://help.mistral.ai/en/articles/347617-do-you-use-my-user-data-to-train-your-artificial-intelligence-models"],
+    "openrouter": ["https://openrouter.ai/docs/api-reference/limits", "https://openrouter.ai/docs/features/privacy-and-logging"],
+    "cloudflare": ["https://developers.cloudflare.com/workers-ai/platform/pricing/", "https://developers.cloudflare.com/workers-ai/platform/limits/", "https://developers.cloudflare.com/workers-ai/platform/data-usage/"],
+    "ovh": ["https://docs.ovhcloud.com/en/guides/public-cloud/ai-machine-learning/ai-endpoints-getting-started"]
+  },
+  "customEndpoints": { "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1": "ovh" },
+  "customNodePrefixes": { "ovhanon": "ovh" },
+  "gatewayLimits": { "freellmapi": { "rpm": 120, "rpd": 20000 } },
+  "allowedRoutes": [
+    "GET /v1/models",
+    "POST /v1/chat/completions",
+    "POST /v1/embeddings"
+  ],
+  "forbiddenBodyFields": ["extra_body", "models", "route", "fallbacks", "fallback_models", "plugins", "web_search_options", "provider", "transforms"],
+  "blockedGroupedIds": ["fusion"],
+  "allowedToolTypes": ["function"],
+  "providers": {
+    "groq": {
+      "ids": ["groq"],
+      "precondition": "Groq account on the Free plan; never upgrade to Developer (that needs a card and bills).",
+      "dataUse": "no-retention-default",
+      "limits": { "rpm": 30, "rpd": 1000 },
+      "allow": [
+        "openai/gpt-oss-120b", "openai/gpt-oss-20b", "openai/gpt-oss-safeguard-20b",
+        "qwen/qwen3.8-27b", "whisper-large-v3", "whisper-large-v3-turbo",
+        "meta-llama/llama-prompt-guard-2-22m", "meta-llama/llama-prompt-guard-2-86m"
+      ]
+    },
+    "google": {
+      "ids": ["gemini", "google"],
+      "precondition": "Gemini API key from a project with NO billing account linked (Free tier only).",
+      "dataUse": "TRAINS-ON-DATA-AND-HUMAN-REVIEW",
+      "limits": { "rpm": 10, "rpd": 250 },
+      "allow": [
+        "gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite",
+        "gemini-3-flash-preview", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite",
+        "gemini-embedding-2", "gemini-embedding-001"
+      ]
+    },
+    "mistral": {
+      "ids": ["mistral"],
+      "precondition": "Mistral Studio in Free mode; never enable pay-as-you-go. Opt out of training in Admin > Privacy.",
+      "dataUse": "TRAINS-ON-DATA-UNLESS-OPTED-OUT",
+      "limits": { "rpm": 60, "rpd": 5000 },
+      "allowPrefix": ["mistral-", "magistral-", "codestral-", "devstral-", "ministral-", "open-mistral-", "pixtral-"]
+    },
+    "openrouter": {
+      "ids": ["openrouter"],
+      "precondition": "OpenRouter account with $0 credits; only ':free' variants are ever sent.",
+      "dataUse": "provider-dependent",
+      "limits": { "rpm": 20, "rpd": 50 },
+      "allowSuffix": ":free"
+    },
+    "cloudflare": {
+      "ids": ["cloudflare-ai", "cloudflare", "cf"],
+      "precondition": "Cloudflare account on the Workers FREE plan (10,000 Neurons/day); never move to Workers Paid.",
+      "dataUse": "no-retention-no-training",
+      "limits": { "rpm": 300, "rpd": 1000 },
+      "allowPrefix": "@cf/",
+      "deny": [
+        "@cf/moonshotai/kimi-k2.6", "@cf/moonshotai/kimi-k2.7-code",
+        "@cf/zai-org/glm-5.2", "@cf/zai-org/glm-5.3", "@cf/zai-org/glm-5.3-flash",
+        "@cf/deepseek-ai/deepseek-v4-flash-0731", "@cf/deepseek-ai/deepseek-v4.1-flash-1017", "@cf/deepseek-ai/deepseek-v4-pro-0813"
+      ]
+    },
+    "ovh": {
+      "ids": ["ovhcloud", "ovh"],
+      "precondition": "Anonymous (keyless) tier only; do NOT create an OVH API key (needs a payment method).",
+      "dataUse": "no-storage-claimed",
+      "limits": { "rpm": 2, "rpd": 2880 },
+      "allow": [
+        "gpt-oss-120b", "gpt-oss-20b", "Meta-Llama-3_3-70B-Instruct", "Mistral-Small-3.2-24B-Instruct-2506",
+        "Mistral-Nemo-Instruct-2407", "Qwen3.6-27B", "Qwen3.8-27B", "Qwen3.5-9B", "Qwen3.5-397B-A17B"
+      ]
+    }
+  },
+  "reviewQueue": {
+    "note": "Present in a gateway catalog but NOT verified free from an official source on 2026-10-30, or their domains are not reachable from the verification environment. Blocked until verified.",
+    "providers": ["cerebras", "cohere (ToS forbids personal use)", "huggingface", "kilo", "llm7", "nvidia (evaluation-only ToS)", "ollama", "opencode", "pollinations", "zhipu"],
+    "googleModels": ["gemini-3.1-pro-preview", "gemini-3.5-flash", "gemini-3.1-flash-lite-preview", "gemma-4-31b-it", "gemma-4-26b-a4b-it"],
+    "groqModels": ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "meta-llama/llama-4-scout-17b-16e-instruct", "qwen/qwen3-32b", "groq/compound", "groq/compound-mini"]
+  }
+}
