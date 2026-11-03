@@ -5,7 +5,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 TMP="$(mktemp -d)"; PASS=0; FAIL=0; cleanup() { rm -rf "$TMP"; echo "tv: passed=$PASS failed=$FAIL"; [ "$FAIL" -eq 0 ] || exit 1; }
 trap cleanup EXIT
 ck() { local n="$1"; shift; if "$@" >"$TMP/out" 2>&1; then PASS=$((PASS+1)); echo "ok   - $n"; else FAIL=$((FAIL+1)); echo "FAIL - $n"; sed 's/^/       /' "$TMP/out" | tail -6; fi; }
-export HOME="$TMP/home"; mkdir -p "$HOME" "$TMP/bin"; export PATH="$TMP/bin:$PATH" LOG="$TMP/adb.log"
+export HOME="$TMP/home"; unset XDG_CONFIG_HOME TV_CONFIG TV_LAUNCHER_STATE; mkdir -p "$HOME" "$TMP/bin"; export PATH="$TMP/bin:$PATH" LOG="$TMP/adb.log"
 cat > "$TMP/bin/adb" <<'FAKE'
 #!/usr/bin/env bash
 echo "$*" >> "$LOG"
