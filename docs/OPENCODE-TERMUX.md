@@ -77,7 +77,8 @@ Live check 2026-11-03 (sandbox, opencode.ai reachable):
   `deepseek-v4.1-flash-free` and `glm-5.3-flash-free` (the same for both, so not per model; a cloud sandbox shares its outgoing address,
   which is the likely cause). OpenCode retries this for minutes, which looks like a hang: its log (`$GW_HOME/opencode/zen/data/opencode/log`)
   shows the message. Nothing was subscribed or paid. Whether your phone or VPS gets a working free allowance is NOT verified.
-- OpenCode refreshes its catalog from `models.opencode.ai`; without that host it uses the list built into the binary (fewer models).
+- OpenCode refreshes its catalog from `models.opencode.ai`. With that host reachable it fetched a fresh catalog (47 zero-cost `opencode`
+  entries) and still offered the same 9 models, and opencode.ai still answered `Free usage limit reached`.
 Tests: `tests/termux/opencode-zen.test.sh` (16).
 
 ## 5b. First acceptance run on the phone (2026-10-31, Android 16, OpenCode 1.19.5 via proot-distro Debian)
