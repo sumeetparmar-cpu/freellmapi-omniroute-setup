@@ -85,18 +85,27 @@ export function routeAllowed(policy, method, urlPath) {
   });
 }
 
-/** Returns a reason string if the request body tries to enable paid/fallback features, else null. */
-export function inspectBody(policy, body) {
+/** True for the Anthropic Messages routes (what Claude Code calls): they carry Anthropic-shaped bodies, keys and errors. */
+export const isAnthropicRoute = (urlPath) => /^\/v1\/messages(\/count_tokens)?\/*$/.test(urlPath);
+
+/**
+ * Returns a reason string if the request body tries to enable paid/fallback features, else null.
+ * opts.anthropic: the body is an Anthropic Messages request. Its client tools are {name, input_schema} with no type (or
+ * type 'custom'); every other type is an Anthropic server/built-in tool (web search, code execution, ...) and is blocked.
+ */
+export function inspectBody(policy, body, opts = {}) {
   if (body == null || typeof body !== 'object') return null;
   if (body.n !== undefined && body.n !== 1) return "body field 'n' > 1 is blocked (multiplies quota use)";
   if (body.best_of !== undefined) return "body field 'best_of' is blocked";
   // Groq's 'flex'/'performance' tiers (and similar) are paid-plan features: only the standard tiers pass.
   if (body.service_tier !== undefined && !['auto', 'default', 'on_demand'].includes(body.service_tier)) return `body field 'service_tier' must be auto, default or on_demand (other tiers are paid-plan features)`;
   for (const f of policy.forbiddenBodyFields) if (f in body) return `body field '${f}' is blocked (fallback/paid routing)`;
-  if (Array.isArray(body.tools)) {
-    for (const t of body.tools) {
-      if (!policy.allowedToolTypes.includes(t?.type)) return `tool type '${t?.type}' is blocked (server-side tools can bill)`;
-    }
+  if (body.tools != null && !Array.isArray(body.tools)) return "body field 'tools' must be an array";
+  for (const t of body.tools ?? []) {
+    if (opts.anthropic) {
+      if (t === null || typeof t !== 'object' || Array.isArray(t)) return 'each tool must be an object';
+      if (t.type !== undefined && !(policy.allowedAnthropicToolTypes ?? ['custom']).includes(t.type)) return `tool type '${t.type}' is blocked (Anthropic server/built-in tools are not free-only)`;
+    } else if (!policy.allowedToolTypes.includes(t?.type)) return `tool type '${t?.type}' is blocked (server-side tools can bill)`;
   }
   return null;
 }

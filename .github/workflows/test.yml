@@ -18,11 +18,11 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: '24' }
       - name: shellcheck
-        run: shellcheck -x -S warning termux/*.sh termux/lib/common.sh tests/termux/*.sh scripts/*.sh vps/*.sh vps/lib/*.sh tests/vps/*.sh
+        run: shellcheck -x -S warning termux/*.sh termux/lib/common.sh tests/termux/*.sh scripts/*.sh vps/*.sh vps/lib/*.sh tests/vps/*.sh tests/claude-endpoint/*.sh
       - name: secret scan
         run: scripts/check-secrets.sh
       - name: Free-only guard + policy tests (loopback mocks, no credentials)
-        run: node --test tests/guard/*.test.mjs && bash tests/vps/free-install.test.sh && bash tests/vps/monitor-guard.test.sh && bash tests/vps/guard-backup.test.sh && bash tests/termux/free-guard.test.sh && bash tests/termux/diagnose.test.sh && bash tests/termux/opencode-setup.test.sh && bash tests/termux/opencode-install.test.sh && bash tests/termux/test-harness-exit.test.sh && bash tests/vps/preflight-extra.test.sh && bash tests/vps/partial-failure.test.sh
+        run: node --test tests/guard/*.test.mjs && bash tests/vps/free-install.test.sh && bash tests/vps/monitor-guard.test.sh && bash tests/vps/guard-backup.test.sh && bash tests/termux/free-guard.test.sh && bash tests/termux/diagnose.test.sh && bash tests/termux/opencode-setup.test.sh && bash tests/termux/opencode-install.test.sh && bash tests/termux/test-harness-exit.test.sh && bash tests/vps/preflight-extra.test.sh && bash tests/vps/partial-failure.test.sh && bash tests/termux/claude-free.test.sh && bash tests/termux/opencode-zen.test.sh && bash tests/termux/tv.test.sh
       - name: Termux script tests (run on Linux)
         run: bash tests/termux/run-tests.sh && bash tests/termux/test-check-secrets.sh
       - name: PowerShell tests under pwsh on Linux
@@ -127,3 +127,19 @@ jobs:
         with: { node-version: '24' }
       - name: Bootstrap FreeLLMAPI + OmniRoute with guards (real installs)
         run: LLM_TEST_BOOTSTRAP=1 bash tests/termux/bootstrap.test.sh
+
+  # Real installs of both gateways in a throwaway GW_HOME, tested over /v1/messages (what Claude Code uses) against a local mock upstream.
+  claude-endpoint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '24' }
+      - name: Install both gateways (throwaway GW_HOME)
+        run: |
+          export GW_HOME="$RUNNER_TEMP/gw"
+          termux/freellmapi.sh install --yes
+          termux/omniroute.sh install --yes
+      - name: Claude-endpoint tests (mock upstream only)
+        run: LLM_CE_SANDBOX=1 GW_HOME="$RUNNER_TEMP/gw" bash tests/claude-endpoint/run.sh both

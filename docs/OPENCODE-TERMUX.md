@@ -42,7 +42,50 @@ cd ~/freellmapi-omniroute-setup && git pull --ff-only && bash termux/opencode-in
 It never touches the gateways or their data, is safe to re-run, and if neither method works it says so and marks nothing as installed.
 
 Then run OpenCode with `~/llm-gateways/bin/opencode-free` (it reads the guard keys from their mode-600 files; no key is on any command line or in any file it writes). Config: only `freellmapi` and `omniroute` are enabled providers, the background model is ours, sharing and auto-update are off; `bash termux/opencode-setup.sh check` re-verifies that at any time.
-End-to-end acceptance (real coding tasks through each gateway, independent review by the other, refused-provider check): `bash termux/opencode-accept.sh` (untested until you run it; budget 10-20 minutes because of OVH's 2 requests/minute).
+End-to-end acceptance (real coding tasks through each gateway, independent review by the other, refused-provider check): `bash termux/opencode-accept.sh` (run on the phone, 5b, and on Linux, 5a; budget 10-20 minutes because of OVH's 2 requests/minute).
+
+## 5a. Generic Linux (a VPS, a laptop): native, same command
+Off Termux, `bash termux/opencode-install.sh` picks the binary for the CPU (`opencode-linux-x64` or `opencode-linux-arm64`), verifies its
+sha512 against the npm registry exactly as on the phone, and runs it **natively** (method `native`; glibc-runner/proot are only for Termux).
+If you already use OpenCode on that machine, keep this setup separate with `OPENCODE_CFG_DIR=<dir>` (default `~/.config/opencode`).
+Verified 2026-11-03 in the Linux sandbox (x86-64): OpenCode 1.19.5 fetched and integrity-verified, `native` chosen, config check PASS.
+`opencode-accept.sh` there: **10 passed, 0 failed** (about 10 minutes, real keyless OVH inference through both guards): the bug-fix task
+through FreeLLMAPI `gpt-oss-20b` and through OmniRoute `ovhanon/gpt-oss-120b` (file edited, `node --test` passes, checked by the test
+runner, not the model); the 120B reviewer REJECTed the known-bad and APPROVEd the known-good diff; no paid fallback (OpenCode refuses a
+non-enabled provider, the guard refuses `openai/gpt-4o` and `anthropic/claude-sonnet-4-5` with 403). The guards held OVH's 2/minute
+limit locally 9 times (slow, not paid). Tests: `tests/termux/opencode-install.test.sh` (x64 package checks, native choice, honest failure).
+
+## 5c. OpenCode's own free models: a second, separate profile (`opencode-zen-free`)
+```
+bash termux/opencode-setup.sh zen-config          # writes the profile + $GW_HOME/bin/opencode-zen-free (needs opencode-install.sh first)
+bash termux/opencode-setup.sh zen-check
+$GW_HOME/bin/opencode-zen-free models opencode    # what OpenCode offers for free today
+$GW_HOME/bin/opencode-zen-free                    # OpenCode with only those models; pin one: ZEN_MODEL=opencode/<id> ... zen-config
+```
+**How it stays free:** OpenCode's own provider runs anonymously when it finds no key, no saved login and no apiKey; then OpenCode itself
+deletes every model whose price is not 0 and uses the public key (read in the 1.19.5 source). The profile keeps it there: its own
+config/data/cache/state directories (no saved Zen login or global config of yours can reach it), the launcher removes `OPENCODE_*`,
+`ANTHROPIC_*`, `OPENAI_*`, `*_API_KEY` and `*_GUARD_KEY` from the process, and `zen-check` (run by the launcher before every start) refuses
+a saved login, an apiKey or any other enabled provider.
+**Different from `opencode-free`:** requests go straight to opencode.ai, not through the free-only guards (not counted or limited by them);
+OpenCode's own terms for its free models apply, including how they use your data; the free list changes over time.
+Live check 2026-11-03 (sandbox, opencode.ai reachable):
+- free-only holds: the profile offers only free models (9 from OpenCode's bundled list; the live models.dev catalog has 131 `opencode`
+  models, 47 free and 84 paid); asking for a paid one (`opencode/claude-3-5-haiku`) fails at once with exit 1 and no request in the log;
+  no login is saved; `zen-check` PASS; the guarded profile is unchanged.
+- **no model answered from this sandbox:** opencode.ai replied `Free usage limit reached ... subscribe to OpenCode Go` for
+  `deepseek-v4.1-flash-free` and `glm-5.3-flash-free` (the same for both, so not per model; a cloud sandbox shares its outgoing address,
+  which is the likely cause). OpenCode retries this for minutes, which looks like a hang: its log (`$GW_HOME/opencode/zen/data/opencode/log`)
+  shows the message. Nothing was subscribed or paid. Whether your phone or VPS gets a working free allowance is NOT verified.
+- OpenCode refreshes its catalog from `models.opencode.ai`. With that host reachable it fetched a fresh catalog (47 zero-cost `opencode`
+  entries) and still offered the same 9 models, and opencode.ai still answered `Free usage limit reached`.
+- **Your Hostinger VPS (2026-11-03, own address, Ubuntu 26.04 x86-64):** the same minimal install (OpenCode 1.19.5, sha512 verified, isolated
+  `~/opencode-zen` profile, nothing else touched) got the same `Free usage limit reached` answer. So it is not only the shared sandbox address.
+- OpenCode's docs (opencode.ai/docs/zen, read 2026-11-03): "Free-tier chat models require OpenCode; use paid models or Go from other
+  clients." The free models are free "for a limited time"; the free allowance itself is not published. Privacy differs per model:
+  `deepseek-v4.1-flash-free` and `glm-5.3-flash-free` are zero-retention and not used for training; Big Pickle, MiMo, Nemotron, Flint and
+  Pulse Alpha may use your data to improve the model (Nemotron 3 Ultra: trial use only). The server's only suggestion is paid OpenCode Go.
+Tests: `tests/termux/opencode-zen.test.sh` (16).
 
 ## 5b. First acceptance run on the phone (2026-10-31, Android 16, OpenCode 1.19.5 via proot-distro Debian)
 7 passed, 1 failed, with two weak checks found in my own script (fixed afterwards, to be re-run):

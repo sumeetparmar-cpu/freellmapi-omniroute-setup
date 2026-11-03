@@ -25,6 +25,9 @@ const metas = {
   '/opencode-linux-arm64/4.0.0': { os: ['darwin'], cpu: ['arm64'], dist: { tarball: `${base}/good.tgz`, integrity: sri('good.tgz') } },                                                    // wrong os
   '/opencode-linux-arm64/5.0.0': { os: ['linux'], cpu: ['arm64'], dist: { tarball: `${base}/good.tgz` } },                                                                                 // no integrity
   '/opencode-linux-arm64/6.0.0': { os: ['linux'], cpu: ['arm64'], dist: { tarball: 'http://example.com/evil.tgz', integrity: sri('good.tgz') } },                                          // non-https remote tarball
+  '/opencode-linux-x64/1.0.0': { os: ['linux'], cpu: ['x64'], dist: { tarball: `${base}/x86.tgz`, integrity: sri('x86.tgz'), unpackedSize: 4096 } },                                       // generic Linux x64
+  '/opencode-linux-x64/3.0.0': { os: ['linux'], cpu: ['x64'], dist: { tarball: `${base}/good.tgz`, integrity: sri('good.tgz'), unpackedSize: 4096 } },                                     // aarch64 ELF in the x64 package
+  '/opencode-linux-x64/4.0.0': { os: ['linux'], cpu: ['arm64'], dist: { tarball: `${base}/x86.tgz`, integrity: sri('x86.tgz') } },                                                          // wrong cpu tag
 };
 http.createServer((q, s) => { if (metas[q.url]) { s.writeHead(200, { 'content-type': 'application/json' }); return s.end(JSON.stringify(metas[q.url])); }
   if (q.url === '/good.tgz' || q.url === '/x86.tgz') { s.writeHead(200); return s.end(readFileSync(`${dir}${q.url}`)); } s.writeHead(404); s.end('{}'); }).listen(+port, '127.0.0.1');
@@ -39,14 +42,20 @@ neg "an x86 binary"                                     3.0.0 'not an ELF aarch6
 neg "a package for another OS"                          4.0.0 'not a linux/arm64'
 neg "metadata without integrity"                        5.0.0 'no sha512 integrity'
 neg "a plain-http remote tarball"                       6.0.0 'not https'
+X() { node "$ROOT/termux/lib/fetch-opencode.mjs" --registry "http://127.0.0.1:$RP" --package opencode-linux-x64 --out "$T/x$1" --version "$1" 2>&1; }
+ck "fetch x64: the linux-x64 package installs (integrity verified, x86-64 ELF)" bash -c "node '$ROOT/termux/lib/fetch-opencode.mjs' --registry http://127.0.0.1:$RP --package opencode-linux-x64 --out '$T/x1' --version 1.0.0 | grep -q 'integrity verified' && [ -x '$T/x1/bin/opencode' ]"
+ck "fetch x64 REFUSES an aarch64 binary in the x64 package" bash -c "out=\$(node '$ROOT/termux/lib/fetch-opencode.mjs' --registry http://127.0.0.1:$RP --package opencode-linux-x64 --out '$T/x3' --version 3.0.0 2>&1); [ \$? -ne 0 ] && echo \"\$out\" | grep -q 'not an ELF x86-64' && [ ! -e '$T/x3/bin/opencode' ]"
+ck "fetch x64 REFUSES metadata with the wrong cpu" bash -c "! node '$ROOT/termux/lib/fetch-opencode.mjs' --registry http://127.0.0.1:$RP --package opencode-linux-x64 --out '$T/x4' --version 4.0.0 2>&1 | grep -q installed; node '$ROOT/termux/lib/fetch-opencode.mjs' --registry http://127.0.0.1:$RP --package opencode-linux-x64 --out '$T/x4' --version 4.0.0 2>&1 | grep -q 'not a linux/x64'"
+ck "fetch REFUSES an unknown package name" bash -c "node '$ROOT/termux/lib/fetch-opencode.mjs' --registry http://127.0.0.1:$RP --package opencode-darwin-arm64 --out '$T/x5' --version 1.0.0 2>&1 | grep -q 'unsupported package'; [ ! -e '$T/x5' ]"
 ck "fetch REFUSES a plain-http remote registry"          bash -c "! node '$ROOT/termux/lib/fetch-opencode.mjs' --registry http://example.com --out '$T/o7' --version 1.0.0"
 
 # ---------- part 2: installer logic with stand-ins ----------
-export HOME="$T/home" GW_HOME="$T/gw"; mkdir -p "$HOME" "$GW_HOME/config" "$GW_HOME/opencode/bin"
+export HOME="$T/home" GW_HOME="$T/gw" TERMUX_VERSION=0.118.0; mkdir -p "$HOME" "$GW_HOME/config" "$GW_HOME/opencode/bin"   # S1-S7 simulate the phone
 KEY1="fg_$(date +%s%N | sha256sum | cut -c1-30)"; KEY2="fg_$(date +%N | sha256sum | cut -c1-30)"
 printf '%s\n' "$KEY1" > "$GW_HOME/config/guard-freellmapi.clientkey"; printf '%s\n' "$KEY2" > "$GW_HOME/config/guard-omniroute.clientkey"; chmod 600 "$GW_HOME"/config/*
 cat > "$GW_HOME/opencode/bin/opencode" <<'SH'
 #!/bin/sh
+[ -n "${SHIM_STATE:-}" ] && [ -e "$SHIM_STATE/native_broken" ] && { echo "cannot execute binary file" >&2; exit 126; }
 case "$1" in
   --version) echo "1.19.5" ;;
   --probe) shift; echo "ARGC=$#"; for a in "$@"; do echo "ARG=[$a]"; done; echo "CWD=$(pwd)"; echo "HOME=$HOME"; echo "CFG=$OPENCODE_CONFIG"; echo "UPD=$OPENCODE_DISABLE_AUTOUPDATE"
@@ -111,3 +120,13 @@ reset; bash "$INST" >/dev/null 2>&1; : > "$SHIM_STATE/pkg.log"
 ck "S5 re-run keeps the working method and installs nothing" bash -c "bash '$INST' >'$T/s5.log' 2>&1; grep -q 'still works (kept)' '$T/s5.log' && ! grep -q 'install' '$SHIM_STATE/pkg.log'"
 ck "S6 --method proot is honoured (and refuses an unknown method)" bash -c "reset=1; bash '$INST' --method proot >'$T/s6.log' 2>&1; [ \"\$(cat '$GW_HOME/opencode/runner')\" = proot ]; ! bash '$INST' --method bogus >/dev/null 2>&1"
 ck "S7 refuses to run without the gateway guard keys" bash -c "mv '$GW_HOME/config/guard-omniroute.clientkey' '$T/k.bak'; ! bash '$INST' >'$T/s7.log' 2>&1; r=\$?; mv '$T/k.bak' '$GW_HOME/config/guard-omniroute.clientkey'; grep -q 'guard keys are missing' '$T/s7.log'"
+
+# ---------- part 3: generic Linux (a VPS, this runner): the binary runs natively, no Termux packages ----------
+unset TERMUX_VERSION
+reset; ck "S8 generic Linux: auto runs it natively, touches no pkg/grun/proot" bash -c "bash '$INST' >'$T/s8.log' 2>&1; [ \"\$(cat '$GW_HOME/opencode/runner')\" = native ] && [ ! -e '$SHIM_STATE/pkg.log' ] && grep -q 'method: native' '$T/s8.log'"
+ck "S8 generic Linux: config passes its check, launcher reaches the binary" bash -c "bash '$ROOT/termux/opencode-setup.sh' check && [ \"\$('$LF' --version | head -n1)\" = 1.19.5 ]"
+ck "S8 generic Linux: the guard keys arrive and no key is written anywhere" bash -c "o=\$('$LF' --probe); [ \"\$(echo \"\$o\" | sed -n 's/^ORK=//p')\" = \"\$(printf %s '$KEY2' | sha256sum | cut -c1-16)\" ] && ! grep -rqF -e '$KEY1' -e '$KEY2' '$GW_HOME/bin' '$GW_HOME/opencode/inner.sh' '$HOME/.config' '$T/s8.log'"
+: > "$SHIM_STATE/pkg.log"
+ck "S9 generic Linux re-run keeps 'native' and installs nothing" bash -c "bash '$INST' >'$T/s9.log' 2>&1; grep -q \"existing method 'native' still works (kept)\" '$T/s9.log' && [ ! -s '$SHIM_STATE/pkg.log' ]"
+reset; touch "$SHIM_STATE/native_broken"
+ck "S10 generic Linux, binary does not start: fails honestly, no Termux fallbacks tried" bash -c "! bash '$INST' >'$T/s10.log' 2>&1; [ ! -e '$GW_HOME/opencode/runner' ] && grep -q 'did not start on this Linux' '$T/s10.log' && [ ! -e '$SHIM_STATE/pkg.log' ]"

@@ -1,8 +1,9 @@
 #!/usr/bin/env node
-// Download the OpenCode linux-arm64 binary from the npm registry, VERIFY the registry's sha512 integrity, and extract bin/opencode.
+// Download the OpenCode Linux binary from the npm registry, VERIFY the registry's sha512 integrity, and extract bin/opencode.
 // Used instead of `npm install` because npm skips Linux-only packages on Termux (Node reports platform "android"). Zero dependencies.
-//   node fetch-opencode.mjs --version 1.19.5 --out DIR [--package opencode-linux-arm64] [--registry https://registry.npmjs.org]
-// Refuses: a wrong platform package, an integrity mismatch, a non-aarch64 binary, a non-https registry (loopback http is allowed for tests only).
+//   node fetch-opencode.mjs --version 1.19.5 --out DIR [--package opencode-linux-arm64|opencode-linux-x64] [--registry https://registry.npmjs.org]
+// Refuses: an unknown package, a wrong platform package, an integrity mismatch, a binary for another CPU, a non-https registry
+// (loopback http is allowed for tests only).
 import { createHash } from 'node:crypto';
 import { mkdirSync, writeFileSync, readFileSync, existsSync, chmodSync, renameSync, mkdtempSync, rmSync, openSync, readSync, closeSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
@@ -14,6 +15,10 @@ const opt = (k, d) => { const i = a.indexOf(`--${k}`); return i >= 0 ? a[i + 1] 
 const version = opt('version'); const out = opt('out'); const pkg = opt('package', 'opencode-linux-arm64'); const registry = String(opt('registry', 'https://registry.npmjs.org')).replace(/\/+$/, '');
 const die = (m) => { process.stderr.write(`fetch-opencode: ${m}\n`); process.exit(1); };
 if (!/^\d+\.\d+\.\d+$/.test(version ?? '') || !out) die('usage: --version X.Y.Z --out DIR');
+// The two packages we install, with the npm cpu tag and the ELF machine id their binary must carry.
+const ARCH = { 'opencode-linux-arm64': { cpu: 'arm64', elf: 0xb7, name: 'aarch64' }, 'opencode-linux-x64': { cpu: 'x64', elf: 0x3e, name: 'x86-64' } };
+const want = ARCH[pkg];
+if (!want) die(`unsupported package ${pkg} (expected one of: ${Object.keys(ARCH).join(', ')})`);
 const okUrl = (u) => /^https:\/\//.test(u) || /^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?\//.test(u);
 if (!okUrl(`${registry}/`)) die('registry must be https');
 
@@ -30,7 +35,7 @@ const get = async (u, asBuffer) => {
 };
 
 const meta = await get(`${registry}/${pkg}/${version}`, false);
-if (!(meta.os ?? []).includes('linux') || !(meta.cpu ?? []).includes('arm64')) die(`${pkg}@${version} is not a linux/arm64 package (os=${JSON.stringify(meta.os)} cpu=${JSON.stringify(meta.cpu)})`);
+if (!(meta.os ?? []).includes('linux') || !(meta.cpu ?? []).includes(want.cpu)) die(`${pkg}@${version} is not a linux/${want.cpu} package (os=${JSON.stringify(meta.os)} cpu=${JSON.stringify(meta.cpu)})`);
 const { tarball, integrity } = meta.dist ?? {};
 if (!tarball || !/^sha512-/.test(integrity ?? '')) die('registry metadata has no sha512 integrity: refusing to install an unverifiable binary');
 if (!okUrl(tarball)) die('tarball URL is not https');
@@ -48,7 +53,7 @@ try {
   if (t.status !== 0 || !existsSync(ex)) die(`could not extract bin/opencode (${(t.stderr || '').trim().slice(0, 120)})`);
   const fd = openSync(ex, 'r'); const head = Buffer.alloc(20); readSync(fd, head, 0, 20, 0); closeSync(fd);
   const isElf = head.subarray(0, 4).equals(Buffer.from([0x7f, 0x45, 0x4c, 0x46])); const machine = head.readUInt16LE(18);
-  if (!isElf || machine !== 0xb7) die(`the extracted file is not an ELF aarch64 binary (machine=0x${machine.toString(16)}); refusing`);
+  if (!isElf || machine !== want.elf) die(`the extracted file is not an ELF ${want.name} binary (machine=0x${machine.toString(16)}); refusing`);
   mkdirSync(path.join(out, 'bin'), { recursive: true });
   writeFileSync(`${bin}.new`, readFileSync(ex));   // copy, not rename: /tmp and the target are often different filesystems on Android
 } catch (e) { rmSync(tmp, { recursive: true, force: true }); die(`install step failed: ${String(e.message).slice(0, 160)}`); }

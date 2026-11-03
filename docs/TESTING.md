@@ -81,6 +81,35 @@ Node 24 run); stop leaves no orphan process and frees the port.
 | `npm`'s `--allow-scripts` path on npm 11 for OmniRoute | Exercised on npm 11.6.1 (Node 24) and worked; npm 10 path also worked | – |
 | Latest upstream versions after 2026-10-29 | Upstreams move fast | Re-run the suites after `update`; pin versions. |
 
+## Claude-endpoint tests (`tests/claude-endpoint/`)
+
+Claude Code talks to `POST /v1/messages` (Anthropic format). Both gateways expose it; these tests check it end to end against a
+**local mock upstream** (`mock-openai-tools.mjs`: streaming and tool calls, loopback only). Mock-only: they prove the gateways'
+Anthropic translation layer, **not** real provider quality, limits or a real Claude Code binary.
+
+```bash
+LLM_CE_SANDBOX=1 GW_HOME=<throwaway dir> termux/freellmapi.sh install --yes   # and omniroute.sh, once
+LLM_CE_SANDBOX=1 GW_HOME=<same dir> bash tests/claude-endpoint/run.sh [freellmapi|omniroute|both]
+```
+
+12 checks per gateway: anonymous rejected, `x-api-key` and Bearer auth, non-stream and streamed messages, tool call (stream and
+non-stream, `input_json_delta` reassembles to valid JSON), file-edit round trip (the test client applies the gateway's `tool_use`
+and the file is changed on disk), pinned and haiku-family model, `count_tokens`. OmniRoute adds a check that an unaliased Claude name
+is refused (HTTP 400).
+
+Behaviours worth knowing (observed 2026-11-03, FreeLLMAPI `36826e7`, OmniRoute 3.8.52):
+
+- FreeLLMAPI maps Claude family names to `auto` by itself. A mock/custom model must be declared `supportsTools: true`, otherwise tool
+  requests answer 429 "model lacks tool-calling".
+- OmniRoute rejects a bare Claude name ("Ambiguous model" / "Unable to determine provider") until an alias exists (`PUT /api/models/alias`).
+  It also ships built-in aliases such as `claude-sonnet-4-6` -> `antigravity/...`; override them before connecting Claude Code.
+
+Through the free-only guard (what `termux/claude-free.sh` uses): `tests/guard/anthropic.test.mjs` and `tests/termux/claude-free.test.sh`;
+live evidence with real Claude Code and real keyless inference in docs/CLAUDE-CODE.md.
+
+`run.sh` **modifies the installs it runs against** (OmniRoute database entries cannot be undone), so it refuses unless
+`LLM_CE_SANDBOX=1` and an explicit `GW_HOME` are given. CI runs it in the `claude-endpoint` job on a fresh runner.
+
 ## Reproduce locally
 
 ```bash
