@@ -104,6 +104,9 @@ Behaviours worth knowing (observed 2026-11-03, FreeLLMAPI `36826e7`, OmniRoute 3
 - OmniRoute rejects a bare Claude name ("Ambiguous model" / "Unable to determine provider") until an alias exists (`PUT /api/models/alias`).
   It also ships built-in aliases such as `claude-sonnet-4-6` -> `antigravity/...`; override them before connecting Claude Code.
 
+Through the free-only guard (what `termux/claude-free.sh` uses): `tests/guard/anthropic.test.mjs` and `tests/termux/claude-free.test.sh`;
+live evidence with real Claude Code and real keyless inference in docs/CLAUDE-CODE.md.
+
 `run.sh` **modifies the installs it runs against** (OmniRoute database entries cannot be undone), so it refuses unless
 `LLM_CE_SANDBOX=1` and an explicit `GW_HOME` are given. CI runs it in the `claude-endpoint` job on a fresh runner.
 

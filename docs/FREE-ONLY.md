@@ -64,6 +64,8 @@ Result on the real stack: client → free-guard → OmniRoute 3.8.52 → OVH ret
 Limits of this route: it is *one* provider, rate-limited to 2 requests/minute/model by OVH (the guard enforces the same locally), and OVH reserves the right to add caps or retire models. Other keyless providers
 bundled in OmniRoute (`duckduckgo-web`, `cloudflare-playground`, `veoaifree-web`, `uncloseai`, `aihorde`, …) are web/browser bridges or unverified community services; they are not in the policy and are blocked.
 
+Claude Code: the guard also serves the Anthropic `/v1/messages` route with the same policy; use `termux/claude-free.sh` (docs/CLAUDE-CODE.md).
+
 ## Client keys: make "go through the guard" the only way in
 
 Without client keys, anyone who holds the gateway's own API key can call the gateway directly and skip the guard. With client keys the gateway key stays in a root-only file the clients never see:

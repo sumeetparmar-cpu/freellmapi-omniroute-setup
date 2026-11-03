@@ -17,11 +17,14 @@
   "allowedRoutes": [
     "GET /v1/models",
     "POST /v1/chat/completions",
-    "POST /v1/embeddings"
+    "POST /v1/embeddings",
+    "POST /v1/messages",
+    "POST /v1/messages/count_tokens"
   ],
-  "forbiddenBodyFields": ["extra_body", "models", "route", "fallbacks", "fallback_models", "plugins", "web_search_options", "provider", "transforms"],
+  "forbiddenBodyFields": ["extra_body", "models", "route", "fallbacks", "fallback_models", "plugins", "web_search_options", "provider", "transforms", "mcp_servers", "container"],
   "blockedGroupedIds": ["fusion"],
   "allowedToolTypes": ["function"],
+  "allowedAnthropicToolTypes": ["custom"],
   "providers": {
     "groq": {
       "ids": ["groq"],

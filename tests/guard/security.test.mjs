@@ -85,7 +85,7 @@ test('path tricks cannot reach non-whitelisted routes or change what is forwarde
   try {
     for (const p of ['/v1/chat/completions/../../api/keys', '/v1/chat%2Fcompletions', '//v1/chat/completions', '/V1/chat/completions', '/v1/chat/completions;x=1',
       '/v1/chat/completions%00', '/v1/./images/generations', '/v1/t/sometoken/chat/completions', '/v1/chat/completions/extra', '/api/chat', '/api/generate', '/api/settings/api-key',
-      '/v1/messages', '/v1/responses', '/v1/completions', '/v1beta/models/gemini-2.5-flash:generateContent', '/v1/images/generations', '/v1/audio/transcriptions', '/v1/audio/speech',
+      '/v1/messages/batches', '/v1/messages/x', '/v1/messages%2Fbatches', '/v1/messages/count_tokens/x', '/v1/responses', '/v1/completions', '/v1beta/models/gemini-2.5-flash:generateContent', '/v1/images/generations', '/v1/audio/transcriptions', '/v1/audio/speech',
       '/v1/moderations', '/v1/files', '/v1/batches', '/v1/fine_tuning/jobs', '/mcp', '/api/keys', '/api/auth/login', '/dashboard', '/']) {
       const x = await r.call('POST', p, chat(GOOD));
       assert.ok([403, 400].includes(x.status), `${p} -> ${x.status}`);

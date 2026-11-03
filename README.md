@@ -65,6 +65,7 @@ git clone <this repo> && cd freellmapi-omniroute-setup
 ```
 
 **One command, both gateways, free-only guards, real inference test: docs/PHONE-TERMUX.md** (Linux-tested; not yet run on a phone).
+**Claude Code on the free models, through the guard: `bash termux/claude-free.sh` (docs/CLAUDE-CODE.md).**
 
 Dashboards: `http://127.0.0.1:3001` (FreeLLMAPI: create the first account, add provider keys, copy the
 unified key) and `http://127.0.0.1:20128` (OmniRoute: `./termux/omniroute.sh credentials` prints the

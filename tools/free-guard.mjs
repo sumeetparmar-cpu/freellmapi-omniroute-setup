@@ -3,7 +3,8 @@
 //   client -> free-guard (policy, rate limit, cooldown, quota) -> FreeLLMAPI | OmniRoute
 // It never retries, never rewrites the model and never falls back: a blocked or throttled request
 // gets a local 4xx and nothing is sent upstream. Authorization headers are forwarded but never logged.
-// Zero dependencies (Node >= 20).
+// Routes (config/free-policy.json): OpenAI /v1/chat/completions, /v1/embeddings, /v1/models, and the Anthropic /v1/messages
+// (+ /count_tokens) that Claude Code uses. Zero dependencies (Node >= 20).
 //
 //   node free-guard.mjs --gateway freellmapi|omniroute --upstream http://127.0.0.1:3001 --listen 127.0.0.1:3101
 //        [--client-keys-file F --upstream-key-file G]   clients present a guard key; the guard swaps in the gateway key (clients never see it)
@@ -18,7 +19,7 @@ import { readFileSync, writeFileSync, renameSync, appendFileSync, mkdirSync, sta
 import path from 'node:path';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { loadPolicy, classify, limitsFor, routeAllowed, inspectBody } from './lib/free-policy.mjs';
+import { loadPolicy, classify, limitsFor, routeAllowed, inspectBody, isAnthropicRoute } from './lib/free-policy.mjs';
 
 export function parseArgs(argv) {
   const o = { 'max-body-kb': '1024' };
@@ -77,13 +78,17 @@ export function createGuard(opts) {
   const upstreamAuth = opts.upstreamKeyFile ? `Bearer ${readFileSync(opts.upstreamKeyFile, 'utf8').trim()}` : null;
   if (!!clientHashes !== !!upstreamAuth) throw new Error('--client-keys-file and --upstream-key-file must be used together');
   if (clientHashes && clientHashes.length === 0) throw new Error('client keys file has no keys (use --new-client-key)');
-  function clientOk(authHeader) {
-    const m = /^Bearer ([A-Za-z0-9_-]{16,200})$/.exec(authHeader ?? '');
-    if (!m) return false;
-    const h = createHash('sha256').update(m[1]).digest();
+  function keyOk(raw) {
+    if (typeof raw !== 'string' || !/^[A-Za-z0-9_-]{16,200}$/.test(raw)) return false;
+    const h = createHash('sha256').update(raw).digest();
     let ok = false;
     for (const x of clientHashes) if (timingSafeEqual(h, x)) ok = true; // no early exit: constant work per key
     return ok;
+  }
+  // Bearer everywhere; on the Anthropic routes also x-api-key (Claude Code sends that when the key is set as ANTHROPIC_API_KEY).
+  function clientOk(req, anthropic) {
+    const m = /^Bearer ([A-Za-z0-9_-]{16,200})$/.exec(req.headers.authorization ?? '');
+    return (!!m && keyOk(m[1])) || (anthropic && keyOk(req.headers['x-api-key']));
   }
   let lastLookup = 0;
   const served = new Map(); // sha256(auth) -> { at, ids:Set }
@@ -132,9 +137,14 @@ export function createGuard(opts) {
     }
     else if (!opts.quiet) process.stderr.write(line + '\n');
   }
+  // Anthropic clients (Claude Code) read {type:'error', error:{type,...}}; the status code still decides whether they retry.
+  const ANTHROPIC_ERROR = { 400: 'invalid_request_error', 401: 'authentication_error', 403: 'permission_error', 413: 'request_too_large',
+    415: 'invalid_request_error', 421: 'invalid_request_error', 429: 'rate_limit_error' };
   function deny(res, status, type, message, extra = {}, headers = {}) {
     state.blocked++; dirty = true;
-    const body = JSON.stringify({ error: { message, type, code: type, free_guard: true } });
+    const body = JSON.stringify(res.anthropic
+      ? { type: 'error', error: { type: ANTHROPIC_ERROR[status] ?? 'api_error', message, code: type, free_guard: true } }
+      : { error: { message, type, code: type, free_guard: true } });
     res.writeHead(status, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body), ...headers });
     res.end(body);
     log({ ev: 'deny', status, type, ...extra });
@@ -163,6 +173,8 @@ export function createGuard(opts) {
   const server = http.createServer((req, res) => {
     let url;
     try { url = new URL(req.url, 'http://x'); } catch { return deny(res, 400, 'bad_url', 'bad request URL'); }
+    const anthropic = isAnthropicRoute(url.pathname);
+    res.anthropic = anthropic;
     // DNS-rebinding / wrong-vhost defence: only names we expect.
     const host = String(req.headers.host ?? '').toLowerCase().replace(/:\d+$/, '');
     if (!allowedHosts.has(host)) { req.resume(); return deny(res, 421, 'bad_host', 'Host header not allowed', { host: host.replace(/[^\x21-\x7e]/g, '?').slice(0, 60), method: req.method }); }
@@ -176,7 +188,7 @@ export function createGuard(opts) {
       req.resume();
       return deny(res, 403, 'route_blocked', `${req.method} ${url.pathname} is not allowed by the free-only policy`, { path: url.pathname });
     }
-    if (clientHashes && !clientOk(req.headers.authorization)) {
+    if (clientHashes && !clientOk(req, anthropic)) {
       req.resume();
       return deny(res, 401, 'unauthorized', 'missing or invalid free-guard client key', {}, { 'www-authenticate': 'Bearer' });
     }
@@ -210,7 +222,7 @@ export function createGuard(opts) {
         try { body = raw.length ? JSON.parse(raw.toString('utf8')) : {}; } catch { return deny(res, 400, 'bad_json', 'body must be JSON'); }
         // `null`, arrays and scalars are valid JSON but not valid requests: reject before anything dereferences them.
         if (body === null || typeof body !== 'object' || Array.isArray(body)) return deny(res, 400, 'bad_body', 'body must be a JSON object');
-        const bad = inspectBody(policy, body);
+        const bad = inspectBody(policy, body, { anthropic });
         if (bad) return deny(res, 403, 'param_blocked', bad);
         if (opts.killFile && existsSync(opts.killFile)) return deny(res, 503, 'kill_switch', 'free-only audit failed; inference is suspended until `free-policy audit` passes');
         if (body.model !== undefined && (typeof body.model !== 'string' || (body.model !== '' && !/^[\x21-\x7e]+$/.test(body.model)))) {
@@ -222,7 +234,8 @@ export function createGuard(opts) {
           if (ids?.has(body.model)) v = { ok: true, provider: 'freellmapi', model: body.model };
         }
         if (!v.ok) return deny(res, 403, 'model_blocked', `model blocked by free-only policy: ${v.reason}`, { model: String(body.model ?? '').slice(0, 120), provider: v.provider });
-        meta = v;
+        // Token counting is answered by the gateway (no inference): the model is still checked, but it is not metered.
+        meta = /^\/v1\/messages\/count_tokens\/*$/.test(url.pathname) ? { provider: undefined, model: v.model } : v;
       }
       forward(req, res, url, raw, meta);
     }
@@ -247,7 +260,7 @@ export function createGuard(opts) {
     // Forward an ALLOWLIST of headers only: routing/pinning headers (x-omniroute-*, x-freellm-*, session ids, cookies,
     // forwarding headers) never reach the gateway, so a client cannot steer it around the model we validated.
     const headers = { host: up.host, 'content-length': String(raw.length) };
-    for (const h of ['content-type', 'accept', 'user-agent', 'x-request-id', 'idempotency-key']) if (req.headers[h]) headers[h] = req.headers[h];
+    for (const h of ['content-type', 'accept', 'user-agent', 'x-request-id', 'idempotency-key', 'anthropic-version']) if (req.headers[h]) headers[h] = req.headers[h];
     if (upstreamAuth) headers.authorization = upstreamAuth;
     else { if (req.headers.authorization) headers.authorization = req.headers.authorization; if (req.headers['x-api-key']) headers['x-api-key'] = req.headers['x-api-key']; }
     const t0 = now();
