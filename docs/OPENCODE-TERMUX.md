@@ -42,14 +42,18 @@ cd ~/freellmapi-omniroute-setup && git pull --ff-only && bash termux/opencode-in
 It never touches the gateways or their data, is safe to re-run, and if neither method works it says so and marks nothing as installed.
 
 Then run OpenCode with `~/llm-gateways/bin/opencode-free` (it reads the guard keys from their mode-600 files; no key is on any command line or in any file it writes). Config: only `freellmapi` and `omniroute` are enabled providers, the background model is ours, sharing and auto-update are off; `bash termux/opencode-setup.sh check` re-verifies that at any time.
-End-to-end acceptance (real coding tasks through each gateway, independent review by the other, refused-provider check): `bash termux/opencode-accept.sh` (untested until you run it; budget 10-20 minutes because of OVH's 2 requests/minute).
+End-to-end acceptance (real coding tasks through each gateway, independent review by the other, refused-provider check): `bash termux/opencode-accept.sh` (run on the phone, 5b, and on Linux, 5a; budget 10-20 minutes because of OVH's 2 requests/minute).
 
 ## 5a. Generic Linux (a VPS, a laptop): native, same command
 Off Termux, `bash termux/opencode-install.sh` picks the binary for the CPU (`opencode-linux-x64` or `opencode-linux-arm64`), verifies its
 sha512 against the npm registry exactly as on the phone, and runs it **natively** (method `native`; glibc-runner/proot are only for Termux).
 If you already use OpenCode on that machine, keep this setup separate with `OPENCODE_CFG_DIR=<dir>` (default `~/.config/opencode`).
-Verified 2026-11-03 in the Linux sandbox (x86-64): OpenCode 1.19.5 fetched and integrity-verified, `native` chosen, config check PASS,
-launcher runs it. Tests: `tests/termux/opencode-install.test.sh` (x64 package checks, native choice, honest failure, no Termux fallbacks).
+Verified 2026-11-03 in the Linux sandbox (x86-64): OpenCode 1.19.5 fetched and integrity-verified, `native` chosen, config check PASS.
+`opencode-accept.sh` there: **10 passed, 0 failed** (about 10 minutes, real keyless OVH inference through both guards): the bug-fix task
+through FreeLLMAPI `gpt-oss-20b` and through OmniRoute `ovhanon/gpt-oss-120b` (file edited, `node --test` passes, checked by the test
+runner, not the model); the 120B reviewer REJECTed the known-bad and APPROVEd the known-good diff; no paid fallback (OpenCode refuses a
+non-enabled provider, the guard refuses `openai/gpt-4o` and `anthropic/claude-sonnet-4-5` with 403). The guards held OVH's 2/minute
+limit locally 9 times (slow, not paid). Tests: `tests/termux/opencode-install.test.sh` (x64 package checks, native choice, honest failure).
 
 ## 5b. First acceptance run on the phone (2026-10-31, Android 16, OpenCode 1.19.5 via proot-distro Debian)
 7 passed, 1 failed, with two weak checks found in my own script (fixed afterwards, to be re-run):

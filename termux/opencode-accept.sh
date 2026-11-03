@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ACCEPTANCE RUN for OpenCode on THIS phone, through the two free-only guards. UNTESTED until you run it (OpenCode is not installed in the cloud).
+# ACCEPTANCE RUN for OpenCode on this phone or Linux machine, through the two free-only guards (run results: docs/OPENCODE-TERMUX.md 5a/5b).
 # Needs: `termux/opencode-install.sh` done (installs OpenCode and writes the config + launcher), gateways running. Uses a throw-away project; touches nothing else.
 # Expect it to be SLOW: OVH's anonymous tier allows 2 requests/minute/model and an agent makes several requests per task (budget ~10-20 minutes).
 #   ./opencode-accept.sh
