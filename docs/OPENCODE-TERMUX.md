@@ -69,9 +69,16 @@ config/data/cache/state directories (no saved Zen login or global config of your
 a saved login, an apiKey or any other enabled provider.
 **Different from `opencode-free`:** requests go straight to opencode.ai, not through the free-only guards (not counted or limited by them);
 OpenCode's own terms for its free models apply, including how they use your data; the free list changes over time.
-Status 2026-11-03 (sandbox): profile created, `zen-check` PASS, the guarded profile unchanged; offline, OpenCode lists 9 free models from
-its bundled catalog (e.g. `deepseek-v4.1-flash-free`, `glm-5.3-flash-free`). **Not yet verified live:** a real request was refused by
-this sandbox's network policy (`Proxy refused to open a tunnel: 403` for opencode.ai). Tests: `tests/termux/opencode-zen.test.sh` (16).
+Live check 2026-11-03 (sandbox, opencode.ai reachable):
+- free-only holds: the profile offers only free models (9 from OpenCode's bundled list; the live models.dev catalog has 131 `opencode`
+  models, 47 free and 84 paid); asking for a paid one (`opencode/claude-3-5-haiku`) fails at once with exit 1 and no request in the log;
+  no login is saved; `zen-check` PASS; the guarded profile is unchanged.
+- **no model answered from this sandbox:** opencode.ai replied `Free usage limit reached ... subscribe to OpenCode Go` for
+  `deepseek-v4.1-flash-free` and `glm-5.3-flash-free` (the same for both, so not per model; a cloud sandbox shares its outgoing address,
+  which is the likely cause). OpenCode retries this for minutes, which looks like a hang: its log (`$GW_HOME/opencode/zen/data/opencode/log`)
+  shows the message. Nothing was subscribed or paid. Whether your phone or VPS gets a working free allowance is NOT verified.
+- OpenCode refreshes its catalog from `models.opencode.ai`; without that host it uses the list built into the binary (fewer models).
+Tests: `tests/termux/opencode-zen.test.sh` (16).
 
 ## 5b. First acceptance run on the phone (2026-10-31, Android 16, OpenCode 1.19.5 via proot-distro Debian)
 7 passed, 1 failed, with two weak checks found in my own script (fixed afterwards, to be re-run):
