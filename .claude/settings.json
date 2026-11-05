@@ -2,9 +2,13 @@
   "extraKnownMarketplaces": {
     "ponytail": {
       "source": { "source": "github", "repo": "DietrichGebert/ponytail" }
+    },
+    "hallmark": {
+      "source": { "source": "github", "repo": "nutlope/hallmark" }
     }
   },
   "enabledPlugins": {
-    "ponytail@ponytail": true
+    "ponytail@ponytail": true,
+    "hallmark@hallmark": true
   }
 }
