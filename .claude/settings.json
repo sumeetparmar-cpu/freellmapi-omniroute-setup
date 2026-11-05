@@ -1,14 +1,27 @@
 {
   "extraKnownMarketplaces": {
     "ponytail": {
-      "source": { "source": "github", "repo": "DietrichGebert/ponytail" }
+      "source": {
+        "source": "github",
+        "repo": "DietrichGebert/ponytail"
+      }
     },
     "hallmark": {
-      "source": { "source": "github", "repo": "nutlope/hallmark" }
+      "source": {
+        "source": "github",
+        "repo": "nutlope/hallmark"
+      }
+    },
+    "thedotmack": {
+      "source": {
+        "source": "github",
+        "repo": "thedotmack/claude-mem"
+      }
     }
   },
   "enabledPlugins": {
     "ponytail@ponytail": true,
-    "hallmark@hallmark": true
+    "hallmark@hallmark": true,
+    "claude-mem@thedotmack": true
   }
 }
