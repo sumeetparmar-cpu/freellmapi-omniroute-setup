@@ -82,12 +82,15 @@ def get_job(jid):
         j = JOBS.get(jid)
         return dict(j) if j else None
 
-def render_with_progress(inp, outp, keep, kept_dur, jid):
+def render_with_progress(inp, outp, keep, kept_dur, jid, clean=False):
     expr = podcut.keep_expr(keep)
     jd = os.path.dirname(outp)
     vf = os.path.join(jd, "vf.txt"); af = os.path.join(jd, "af.txt")
     open(vf, "w").write("select='%s',setpts=N/FRAME_RATE/TB" % expr)
-    open(af, "w").write("aselect='%s',asetpts=N/SR/TB" % expr)
+    af_chain = "aselect='%s',asetpts=N/SR/TB" % expr
+    if clean:
+        af_chain += "," + podcut.AUDIO_CLEAN
+    open(af, "w").write(af_chain)
     args = SimpleNamespace(encoder="libx264", preset=PRESET, crf=CRF, abitrate="192k")
     cmd = ["nice", "-n", "15", podcut.ffmpeg_bin(), "-y", "-i", inp,
            "-filter_script:v", vf, "-filter_script:a", af] + podcut.encode_opts(args) + \
@@ -126,7 +129,7 @@ def worker():
             set_job(jid, state="rendering", progress=0,
                     original=r["total"], edited=r["kept"], removed=r["removed"], cuts=len(r["remove"]))
             out = os.path.join(jd, "edited.mp4")
-            rc = render_with_progress(inp, out, r["keep"], r["kept"], jid)
+            rc = render_with_progress(inp, out, r["keep"], r["kept"], jid, job.get("clean", True))
             if rc != 0 or not os.path.isfile(out):
                 set_job(jid, state="error", error="ffmpeg failed while rendering (see server log).")
                 continue
@@ -233,7 +236,8 @@ def api_job():
             threshold=clampf(request.args.get("threshold"), -60, -20, -40),
             min_silence=clampf(request.args.get("min_silence"), 0.1, 5, 0.5),
             pad=clampf(request.args.get("pad"), 0, 1, 0.12),
-            min_keep=clampf(request.args.get("min_keep"), 0, 2, 0.2))
+            min_keep=clampf(request.args.get("min_keep"), 0, 2, 0.2),
+            clean=request.args.get("clean", "1") not in ("0", "false", "no", "off"))
     WORK.put(jid)
     return {"id": jid}
 
@@ -315,6 +319,7 @@ def render_app():
   <input id=ms type=range min=0.1 max=3 step=0.05 value=0.5>
   <label>Keep padding <span class=rangeval id=pdv>0.12 s</span></label>
   <input id=pd type=range min=0 max=0.5 step=0.01 value=0.12>
+  <label style="display:flex;align-items:center;gap:8px;margin-top:16px;color:var(--fg)"><input id=clean type=checkbox checked style="width:auto;accent-color:var(--accent)"> Clean up audio (reduce noise, even out volume)</label>
   <button class=btn id=go>Upload &amp; edit</button>
   <p class=muted id=hint style=margin-top:12px>Big files take a while to upload and render. Keep this tab open.</p>
   <p class=err id=err hidden></p>
@@ -339,7 +344,7 @@ $('go').addEventListener('click',function(){
   var f=$('file').files[0];
   if(!f){$('err').hidden=false;$('err').textContent='Choose a file first.';return;}
   $('err').hidden=true;
-  var qs='?name='+encodeURIComponent(f.name)+'&threshold='+$('th').value+'&min_silence='+$('ms').value+'&pad='+$('pd').value;
+  var qs='?name='+encodeURIComponent(f.name)+'&threshold='+$('th').value+'&min_silence='+$('ms').value+'&pad='+$('pd').value+'&clean='+($('clean').checked?'1':'0');
   $('form').hidden=true;$('progress').hidden=false;$('pname').textContent=f.name;$('pstate').textContent='uploading…';
   var xhr=new XMLHttpRequest();xhr.open('POST','/api/job'+qs);
   xhr.setRequestHeader('Content-Type','application/octet-stream');

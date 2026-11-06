@@ -19,6 +19,8 @@ Examples
 import argparse, array, math, os, shutil, subprocess, sys, tempfile
 
 ANALYZE_RATE = 1000  # Hz; plenty for loudness, tiny in memory even for hours
+# Audio cleanup: FFT noise reduction + EBU R128 loudness normalisation to a podcast target.
+AUDIO_CLEAN = "afftdn=nf=-25,loudnorm=I=-16:TP=-1.5:LRA=11"
 
 # ---------------------------------------------------------------- audio input
 def ffmpeg_bin():
@@ -220,7 +222,10 @@ def render_jumpcut(inp, outp, keep, args):
     with tempfile.TemporaryDirectory() as td:
         vf = os.path.join(td, "vf.txt"); af = os.path.join(td, "af.txt")
         open(vf, "w").write("select='%s',setpts=N/FRAME_RATE/TB" % expr)
-        open(af, "w").write("aselect='%s',asetpts=N/SR/TB" % expr)
+        af_chain = "aselect='%s',asetpts=N/SR/TB" % expr
+        if getattr(args, "clean", False):
+            af_chain += "," + AUDIO_CLEAN
+        open(af, "w").write(af_chain)
         cmd = [ffmpeg_bin(), "-y", "-i", inp, "-filter_script:v", vf, "-filter_script:a", af]
         cmd += encode_opts(args) + [outp]
         run_ffmpeg(cmd)
@@ -237,6 +242,8 @@ def render_multicam(files, outp, shots, audio_index, args):
         for f in files:
             cmd += ["-i", f]
         cmd += ["-filter_complex_script", fc, "-map", "[outv]", "-map", "%d:a:0" % audio_index]
+        if getattr(args, "clean", False):
+            cmd += ["-af", AUDIO_CLEAN]
         cmd += encode_opts(args) + [outp]
         run_ffmpeg(cmd)
 
@@ -323,6 +330,7 @@ def add_encode_args(sp):
     sp.add_argument("--preset", default="medium", help="encoder preset (default medium; veryfast is quicker, bigger)")
     sp.add_argument("--crf", type=int, default=20, help="quality 0-51, lower is better (default 20)")
     sp.add_argument("--abitrate", default="192k", help="audio bitrate (default 192k)")
+    sp.add_argument("--clean", action="store_true", help="clean up audio: reduce background noise and normalise loudness")
 
 def main():
     args = build_parser().parse_args()
