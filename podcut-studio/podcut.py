@@ -247,6 +247,74 @@ def render_multicam(files, outp, shots, audio_index, args):
         cmd += encode_opts(args) + [outp]
         run_ffmpeg(cmd)
 
+# ---------------------------------------------------------------- single-camera auto-angles
+def even(x):
+    x = int(round(x)); return x - (x % 2)
+
+# Crop rectangles as fractions (w, h, x, y) of the frame; angle 0 is always the full wide shot.
+LAYOUTS = {
+    "single": [None, (0.70, 0.70, 0.15, 0.08)],
+    "duo":    [None, (0.56, 0.94, 0.02, 0.03), (0.56, 0.94, 0.42, 0.03)],
+}
+
+def probe_dimensions(path):
+    pr = shutil.which("ffprobe")
+    if not pr:
+        return None
+    p = subprocess.run([pr, "-v", "error", "-select_streams", "v:0", "-show_entries",
+                        "stream=width,height", "-of", "csv=p=0:s=x", path],
+                       stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    try:
+        w, h = p.stdout.decode().strip().split("x")
+        return int(w), int(h)
+    except Exception:
+        return None
+
+def auto_angle_shots(keep, total, n_angles, min_shot=2.5, wide_every=3):
+    # Cut at the start of speech runs (each conversational "beat"); no shot shorter than min_shot.
+    cuts = [0.0]
+    for s, e in keep:
+        if s - cuts[-1] >= min_shot:
+            cuts.append(s)
+    if len(cuts) > 1 and total - cuts[-1] < min_shot:
+        cuts.pop()
+    cuts.append(total)
+    shots, punch = [], 1
+    for i in range(len(cuts) - 1):
+        if n_angles <= 1:
+            angle = 0
+        elif i % wide_every == 0:
+            angle = 0            # periodic wide shot
+        else:
+            angle = punch
+            if n_angles > 2:
+                punch = 1 + (punch % (n_angles - 1))
+        shots.append({"start": cuts[i], "end": cuts[i + 1], "angle": angle})
+    return shots
+
+def render_autocam(video, outp, shots, layout, W, H, args):
+    rects = LAYOUTS[layout]
+    parts, cat = [], ""
+    for i, s in enumerate(shots):
+        base = "[0:v]trim=%.3f:%.3f,setpts=PTS-STARTPTS" % (s["start"], s["end"])
+        rect = rects[s["angle"]] if s["angle"] < len(rects) else None
+        if rect:
+            fw, fh, fx, fy = rect
+            cw, ch = even(fw * W), even(fh * H)
+            cx, cy = min(even(fx * W), W - cw), min(even(fy * H), H - ch)
+            base += ",crop=%d:%d:%d:%d" % (cw, ch, cx, cy)
+        base += ",scale=%d:%d,setsar=1[v%d]" % (W, H, i)
+        parts.append(base); cat += "[v%d]" % i
+    graph = ";".join(parts) + ";" + cat + "concat=n=%d:v=1:a=0[outv]" % len(shots)
+    with tempfile.TemporaryDirectory() as td:
+        fc = os.path.join(td, "fc.txt"); open(fc, "w").write(graph)
+        cmd = [ffmpeg_bin(), "-y", "-i", video, "-filter_complex_script", fc,
+               "-map", "[outv]", "-map", "0:a:0?"]
+        if getattr(args, "clean", False):
+            cmd += ["-af", AUDIO_CLEAN]
+        cmd += encode_opts(args) + [outp]
+        run_ffmpeg(cmd)
+
 # ---------------------------------------------------------------- commands
 def cmd_jumpcut(args):
     print("Scanning audio of %s ..." % args.input)
@@ -293,6 +361,32 @@ def cmd_multicam(args):
     render_multicam(args.tracks, out, r["shots"], ai, args)
     print("\nDone -> %s" % out)
 
+def cmd_autocam(args):
+    dim = probe_dimensions(args.input)
+    if not dim:
+        sys.exit("Could not read the video's size (need ffprobe and a real video file).")
+    W, H = even(dim[0]), even(dim[1])
+    print("Scanning %s (%dx%d) ..." % (args.input, W, H))
+    samples, sr = read_mono(args.input)
+    sil = analyze_silence(samples, sr, args.threshold, args.min_silence, 0.2, args.pad)
+    n_angles = len(LAYOUTS[args.layout])
+    shots = auto_angle_shots(sil["keep"], sil["total"], n_angles, args.min_shot, args.wide_every)
+    names = {0: "WIDE", 1: ("ZOOM" if args.layout == "single" else "LEFT"), 2: "RIGHT"}
+    print("  layout   : %s (%d angles)" % (args.layout, n_angles))
+    print("  duration : %s" % fmt_dur(sil["total"]))
+    print("  shots    : %d" % len(shots))
+    for s in shots[:12]:
+        print("    %-5s %s - %s" % (names.get(s["angle"], "A%d" % s["angle"]), fmt_dur(s["start"]), fmt_dur(s["end"])))
+    if len(shots) > 12:
+        print("    ... (%d more)" % (len(shots) - 12))
+    if args.dry_run:
+        print("\nDry run - nothing rendered.")
+        return
+    out = args.output or (os.path.splitext(args.input)[0] + "_angles" + os.path.splitext(args.input)[1])
+    print("\nRendering multi-angle edit...")
+    render_autocam(args.input, out, shots, args.layout, W, H, args)
+    print("\nDone -> %s" % out)
+
 def build_parser():
     p = argparse.ArgumentParser(prog="podcut", description="Edit long podcasts with ffmpeg: silence removal and multicam switching.")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -323,6 +417,21 @@ def build_parser():
     m.add_argument("--dry-run", action="store_true")
     add_encode_args(m)
     m.set_defaults(func=cmd_multicam)
+
+    a = sub.add_parser("autocam", help="make multi-angle cuts from a single camera")
+    a.add_argument("input")
+    a.add_argument("-o", "--output")
+    a.add_argument("--layout", choices=["single", "duo"], default="duo",
+                   help="single = one person (wide + zoom-in); duo = two people side by side (wide + left + right)")
+    a.add_argument("--min-shot", type=float, default=2.5, help="hold each angle at least this long, seconds (default 2.5)")
+    a.add_argument("--wide-every", type=int, default=3, help="show the wide shot every Nth cut (default 3)")
+    a.add_argument("--threshold", type=float, default=-40)
+    a.add_argument("--min-silence", type=float, default=0.5)
+    a.add_argument("--pad", type=float, default=0.12)
+    a.add_argument("--fps", type=int, default=30)
+    a.add_argument("--dry-run", action="store_true")
+    add_encode_args(a)
+    a.set_defaults(func=cmd_autocam)
     return p
 
 def add_encode_args(sp):

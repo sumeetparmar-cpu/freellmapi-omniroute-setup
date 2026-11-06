@@ -111,6 +111,66 @@ def render_with_progress(inp, outp, keep, kept_dur, jid, clean=False):
     p.wait(); logf.close()
     return p.returncode
 
+def assign_angles_timed(keep, n_angles, min_shot=3.0, wide_every=3):
+    # Hold each angle for ~min_shot of kept content, then rotate (wide every Nth switch).
+    angles, cur, acc, switches, punch = [], 0, 0.0, 0, 1
+    for (s, e) in keep:
+        angles.append(cur)
+        acc += (e - s)
+        if acc >= min_shot:
+            acc = 0.0; switches += 1
+            if n_angles <= 1:
+                cur = 0
+            elif switches % wide_every == 0:
+                cur = 0
+            else:
+                cur = punch
+                if n_angles > 2:
+                    punch = 1 + (punch % (n_angles - 1))
+    return angles
+
+def render_combined(inp, outp, keep, angles, layout, W, H, clean, jid):
+    # Remove silences AND cut between virtual angles in one pass: trim each kept
+    # segment, crop it to its angle, scale back to full frame, and concat video + audio.
+    rects = podcut.LAYOUTS.get(layout, podcut.LAYOUTS["duo"])
+    parts, cat = [], ""
+    for i, ((s, e), a) in enumerate(zip(keep, angles)):
+        v = "[0:v]trim=%.3f:%.3f,setpts=PTS-STARTPTS" % (s, e)
+        rect = rects[a] if a < len(rects) else None
+        if rect:
+            fw, fh, fx, fy = rect
+            cw, ch = podcut.even(fw * W), podcut.even(fh * H)
+            cx, cy = min(podcut.even(fx * W), W - cw), min(podcut.even(fy * H), H - ch)
+            v += ",crop=%d:%d:%d:%d" % (cw, ch, cx, cy)
+        v += ",scale=%d:%d,setsar=1[v%d]" % (W, H, i)
+        parts.append(v)
+        parts.append("[0:a]atrim=%.3f:%.3f,asetpts=PTS-STARTPTS[a%d]" % (s, e, i))
+        cat += "[v%d][a%d]" % (i, i)
+    graph = ";".join(parts) + ";" + cat + "concat=n=%d:v=1:a=1[outv][outa]" % len(keep)
+    amap = "[outa]"
+    if clean:
+        graph += ";[outa]" + podcut.AUDIO_CLEAN + "[outac]"; amap = "[outac]"
+    jd = os.path.dirname(outp)
+    fc = os.path.join(jd, "fc.txt"); open(fc, "w").write(graph)
+    args = SimpleNamespace(encoder="libx264", preset=PRESET, crf=CRF, abitrate="192k")
+    cmd = ["nice", "-n", "15", podcut.ffmpeg_bin(), "-y", "-i", inp,
+           "-filter_complex_script", fc, "-map", "[outv]", "-map", amap] + podcut.encode_opts(args) + \
+          ["-progress", "pipe:1", "-nostats", outp]
+    logf = open(os.path.join(jd, "ffmpeg.log"), "wb")
+    p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=logf, text=True)
+    denom = max(0.1, sum(e - s for s, e in keep))
+    for line in p.stdout:
+        line = line.strip()
+        if line.startswith("out_time_us="):
+            try:
+                set_job(jid, progress=min(99, round(int(line.split("=", 1)[1]) / 1e6 / denom * 100)))
+            except ValueError:
+                pass
+        elif line == "progress=end":
+            set_job(jid, progress=100)
+    p.wait(); logf.close()
+    return p.returncode
+
 def worker():
     while True:
         jid = WORK.get()
@@ -129,7 +189,18 @@ def worker():
             set_job(jid, state="rendering", progress=0,
                     original=r["total"], edited=r["kept"], removed=r["removed"], cuts=len(r["remove"]))
             out = os.path.join(jd, "edited.mp4")
-            rc = render_with_progress(inp, out, r["keep"], r["kept"], jid, job.get("clean", True))
+            if job.get("angles"):
+                dim = podcut.probe_dimensions(inp)
+                if dim:
+                    W, H = podcut.even(dim[0]), podcut.even(dim[1])
+                    layout = job.get("layout", "duo")
+                    n_angles = len(podcut.LAYOUTS.get(layout, podcut.LAYOUTS["duo"]))
+                    ang = assign_angles_timed(r["keep"], n_angles)
+                    rc = render_combined(inp, out, r["keep"], ang, layout, W, H, job.get("clean", True), jid)
+                else:
+                    rc = render_with_progress(inp, out, r["keep"], r["kept"], jid, job.get("clean", True))
+            else:
+                rc = render_with_progress(inp, out, r["keep"], r["kept"], jid, job.get("clean", True))
             if rc != 0 or not os.path.isfile(out):
                 set_job(jid, state="error", error="ffmpeg failed while rendering (see server log).")
                 continue
@@ -237,7 +308,9 @@ def api_job():
             min_silence=clampf(request.args.get("min_silence"), 0.1, 5, 0.5),
             pad=clampf(request.args.get("pad"), 0, 1, 0.12),
             min_keep=clampf(request.args.get("min_keep"), 0, 2, 0.2),
-            clean=request.args.get("clean", "1") not in ("0", "false", "no", "off"))
+            clean=request.args.get("clean", "1") not in ("0", "false", "no", "off"),
+            angles=request.args.get("angles", "0") in ("1", "true", "yes", "on"),
+            layout=request.args.get("layout") if request.args.get("layout") in ("single", "duo") else "duo")
     WORK.put(jid)
     return {"id": jid}
 
@@ -320,6 +393,8 @@ def render_app():
   <label>Keep padding <span class=rangeval id=pdv>0.12 s</span></label>
   <input id=pd type=range min=0 max=0.5 step=0.01 value=0.12>
   <label style="display:flex;align-items:center;gap:8px;margin-top:16px;color:var(--fg)"><input id=clean type=checkbox checked style="width:auto;accent-color:var(--accent)"> Clean up audio (reduce noise, even out volume)</label>
+  <label style="display:flex;align-items:center;gap:8px;margin-top:12px;color:var(--fg)"><input id=angles type=checkbox style="width:auto;accent-color:var(--accent)"> Multi-angle: make one camera look multi-camera (auto zoom-ins)</label>
+  <div id=layoutrow hidden><label for=layout>Who's on camera</label><select id=layout><option value=duo>Two people, side by side</option><option value=single>One person</option></select></div>
   <button class=btn id=go>Upload &amp; edit</button>
   <p class=muted id=hint style=margin-top:12px>Big files take a while to upload and render. Keep this tab open.</p>
   <p class=err id=err hidden></p>
@@ -340,11 +415,12 @@ def render_app():
 var $=function(i){return document.getElementById(i)};
 function rng(id,out,fmt){var e=$(id);function u(){$(out).textContent=fmt(+e.value)}e.addEventListener('input',u);u()}
 rng('th','thv',function(v){return v+' dB'});rng('ms','msv',function(v){return v.toFixed(2)+' s'});rng('pd','pdv',function(v){return v.toFixed(2)+' s'});
+$('angles').addEventListener('change',function(){$('layoutrow').hidden=!$('angles').checked;});
 $('go').addEventListener('click',function(){
   var f=$('file').files[0];
   if(!f){$('err').hidden=false;$('err').textContent='Choose a file first.';return;}
   $('err').hidden=true;
-  var qs='?name='+encodeURIComponent(f.name)+'&threshold='+$('th').value+'&min_silence='+$('ms').value+'&pad='+$('pd').value+'&clean='+($('clean').checked?'1':'0');
+  var qs='?name='+encodeURIComponent(f.name)+'&threshold='+$('th').value+'&min_silence='+$('ms').value+'&pad='+$('pd').value+'&clean='+($('clean').checked?'1':'0')+'&angles='+($('angles').checked?'1':'0')+'&layout='+$('layout').value;
   $('form').hidden=true;$('progress').hidden=false;$('pname').textContent=f.name;$('pstate').textContent='uploading…';
   var xhr=new XMLHttpRequest();xhr.open('POST','/api/job'+qs);
   xhr.setRequestHeader('Content-Type','application/octet-stream');
