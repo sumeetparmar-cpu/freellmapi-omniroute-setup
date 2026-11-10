@@ -24,6 +24,10 @@ from flask import Flask, request, Response, send_file, redirect, abort, make_res
 DATA_DIR = os.environ.get("PODCUT_DATA_DIR", os.path.join(os.path.dirname(os.path.abspath(__file__)), "podcut-data"))
 JOBS_DIR = os.path.join(DATA_DIR, "jobs")
 os.makedirs(JOBS_DIR, exist_ok=True)
+# Jobs live in memory, so anything still on disk at startup is an orphan (a dropped
+# upload, or files left by a restart). Remove it so it never eats the disk.
+for _d in os.listdir(JOBS_DIR):
+    shutil.rmtree(os.path.join(JOBS_DIR, _d), ignore_errors=True)
 SECRET = os.environ.get("PODCUT_SECRET", "").encode() or hashlib.sha256(b"dev-insecure-secret").digest()
 PWHASH = os.environ.get("PODCUT_PWHASH", "")  # empty => dev mode, password "podcut"
 MAX_BYTES = int(float(os.environ.get("PODCUT_MAX_GB", "8")) * (1024 ** 3))
@@ -206,8 +210,10 @@ def worker():
                 continue
             set_job(jid, state="done", progress=100, output_path=out,
                     output_size=os.path.getsize(out), done_at=time.time())
-        except Exception as e:
-            set_job(jid, state="error", error=str(e)[:300])
+        except BaseException as e:  # podcut calls sys.exit on unreadable files; never let that kill the worker
+            set_job(jid, state="error", done_at=time.time(),
+                    error=(str(e).split("\n")[0].replace(inp, job.get("name", "the file")).rstrip(": ")[:300]
+                           or "Could not process this file."))
         finally:
             try:
                 if os.path.isfile(inp):
@@ -221,7 +227,7 @@ def reaper():
         with JOB_LOCK:
             items = list(JOBS.items())
         for jid, j in items:
-            if j.get("state") == "done" and j.get("done_at") and now - j["done_at"] > KEEP_SECONDS:
+            if j.get("state") in ("done", "error") and j.get("done_at") and now - j["done_at"] > KEEP_SECONDS:
                 shutil.rmtree(os.path.join(JOBS_DIR, jid), ignore_errors=True)
                 with JOB_LOCK:
                     JOBS.pop(jid, None)
@@ -247,6 +253,8 @@ def harden(resp):
     resp.headers["X-Content-Type-Options"] = "nosniff"
     resp.headers["X-Frame-Options"] = "DENY"
     resp.headers["Referrer-Policy"] = "no-referrer"
+    if resp.mimetype == "text/html":
+        resp.headers["Cache-Control"] = "no-store"  # always load the current page after an update
     return resp
 
 @app.route("/healthz")
@@ -300,6 +308,9 @@ def api_job():
     except ValueError:
         shutil.rmtree(jd, ignore_errors=True)
         return {"error": "File is larger than the %d GB limit." % round(MAX_BYTES / (1024 ** 3))}, 413
+    except Exception:  # connection dropped mid-upload: do not leave a partial file behind
+        shutil.rmtree(jd, ignore_errors=True)
+        return {"error": "Upload was interrupted."}, 400
     if total == 0:
         shutil.rmtree(jd, ignore_errors=True)
         return {"error": "No file received."}, 400
@@ -328,6 +339,7 @@ def api_status(jid):
             out[k] = round(j[k], 1); out[k + "_h"] = fmt_dur(j[k])
     if j.get("state") == "done":
         out["download"] = "/api/job/%s/file" % jid
+        out["preview"] = "/api/job/%s/preview" % jid
         out["size_mb"] = round(j.get("output_size", 0) / 1e6, 1)
         if j.get("original"):
             out["saved_pct"] = round(j["removed"] / j["original"] * 100)
@@ -343,6 +355,17 @@ def api_file(jid):
         abort(404)
     base = re.sub(r"[^A-Za-z0-9_.-]+", "_", os.path.splitext(j.get("name", "episode"))[0])[:60] or "episode"
     return send_file(j["output_path"], as_attachment=True, download_name=base + "_podcut.mp4")
+
+@app.route("/api/job/<jid>/preview")
+def api_preview(jid):
+    require_auth()
+    if not re.match(r"^[0-9a-f]{32}$", jid):
+        abort(404)
+    j = get_job(jid)
+    if not j or j.get("state") != "done" or not j.get("output_path"):
+        abort(404)
+    # inline (not an attachment) + range support so the <video> player can stream and seek
+    return send_file(j["output_path"], mimetype="video/mp4", as_attachment=False, conditional=True)
 
 # ------------------------------------------------------------------ pages
 def page(title, body):
@@ -407,7 +430,11 @@ def render_app():
     <div class=tile><span>Edited</span><b id=tedit>–</b></div>
     <div class=tile><span>Saved</span><b id=tsave>–</b></div>
   </div>
-  <a class=dl id=dl hidden>Download edited file</a>
+  <video id=preview controls playsinline style="width:100%;margin-top:14px;border-radius:10px;background:#000;display:none"></video>
+  <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center">
+    <a class=dl id=dl hidden>Download edited file</a>
+    <button class="btn sec" id=again hidden>Edit another</button>
+  </div>
   <p class=err id=perr hidden></p>
   <p class=muted id=keepnote hidden>Your edited file is kept on the server for a limited time, then deleted.</p>
 </div>
@@ -416,6 +443,7 @@ var $=function(i){return document.getElementById(i)};
 function rng(id,out,fmt){var e=$(id);function u(){$(out).textContent=fmt(+e.value)}e.addEventListener('input',u);u()}
 rng('th','thv',function(v){return v+' dB'});rng('ms','msv',function(v){return v.toFixed(2)+' s'});rng('pd','pdv',function(v){return v.toFixed(2)+' s'});
 $('angles').addEventListener('change',function(){$('layoutrow').hidden=!$('angles').checked;});
+$('again').addEventListener('click',function(){location.reload();});
 $('go').addEventListener('click',function(){
   var f=$('file').files[0];
   if(!f){$('err').hidden=false;$('err').textContent='Choose a file first.';return;}
@@ -441,7 +469,7 @@ function poll(id){
     $('pstate').textContent=label+(j.state==='rendering'?(j.progress||0)+'%':'');
     $('pbar').style.width=(j.progress||0)+'%';
     if(j.original_h){$('ptiles').hidden=false;$('torig').textContent=j.original_h;$('tedit').textContent=j.edited_h||'–';$('tsave').textContent=(j.saved_pct!=null?j.saved_pct+'%':'–');}
-    if(j.state==='done'){$('dl').hidden=false;$('dl').href=j.download;$('dl').textContent='Download edited file ('+(j.size_mb||'?')+' MB)';$('keepnote').hidden=false;$('pstate').textContent='done';return;}
+    if(j.state==='done'){if(j.preview){var v=$('preview');v.src=j.preview;v.style.display='block';}$('dl').hidden=false;$('dl').href=j.download;$('dl').textContent='Download ('+(j.size_mb||'?')+' MB)';$('again').hidden=false;$('keepnote').hidden=false;$('pstate').textContent='done';return;}
     setTimeout(function(){poll(id)},1500);
   }).catch(function(){setTimeout(function(){poll(id)},3000)});
 }

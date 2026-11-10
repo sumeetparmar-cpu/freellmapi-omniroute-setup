@@ -20,7 +20,7 @@ import argparse, array, math, os, shutil, subprocess, sys, tempfile
 
 ANALYZE_RATE = 1000  # Hz; plenty for loudness, tiny in memory even for hours
 # Audio cleanup: FFT noise reduction + EBU R128 loudness normalisation to a podcast target.
-AUDIO_CLEAN = "afftdn=nf=-25,loudnorm=I=-16:TP=-1.5:LRA=11"
+AUDIO_CLEAN = "afftdn=nf=-25,loudnorm=I=-16:TP=-1.5:LRA=11,aresample=48000"
 
 # ---------------------------------------------------------------- audio input
 def ffmpeg_bin():
@@ -254,7 +254,7 @@ def even(x):
 # Crop rectangles as fractions (w, h, x, y) of the frame; angle 0 is always the full wide shot.
 LAYOUTS = {
     "single": [None, (0.70, 0.70, 0.15, 0.08)],
-    "duo":    [None, (0.56, 0.94, 0.02, 0.03), (0.56, 0.94, 0.42, 0.03)],
+    "duo":    [None, (0.60, 0.60, 0.00, 0.12), (0.60, 0.60, 0.40, 0.12)],
 }
 
 def probe_dimensions(path):
